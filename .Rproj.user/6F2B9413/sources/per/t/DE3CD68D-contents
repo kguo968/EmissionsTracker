@@ -1,0 +1,367 @@
+#
+# This is a Shiny web application. You can run the application by clicking
+# the 'Run App' button above.
+#
+# Find out more about building applications with Shiny here:
+#
+#    http://shiny.rstudio.com/
+#
+
+
+library(shiny)
+library(readxl)
+library(tidyverse)
+library(plotly)
+library(plyr)
+library(mfePubs)
+
+source("helper.R")
+
+# Import all emissions data and store as single data frame
+if (!file.exists("emissions.rda")) {
+    getSheet()
+}
+
+load(file = "emissions.rda")
+
+
+# Get initial year (2018)
+emission_year <- emissions %>% 
+    filter(Year == 2018)
+
+# Extract summary information 
+summary_emission <- assignSector(emission_year) %>%
+    getSummary() %>% 
+    StartEnd()
+
+# Import time series data
+time_series_data <- read_xlsx("Data/emissions data.xlsx", range = "A11:AF1072")[-c(178:261,300:325,539,1053:1056), ]
+
+time_series_summary <- timeSummary(time_series_data)
+time_series_clean <- cleanSheet(time_series_data)
+
+# Get GHG data frame
+total_ghg <- getGHG(summary_emission)
+
+# Define UI for application that draws a histogram
+ui <- fluidPage(
+
+    # Application title
+    titlePanel("New Zealand's Interactive Emissions Tracker"),
+    
+    # 'Main panel with the emissions graph
+    fluidRow(
+        column(width=8,
+                   plotlyOutput('Emissions', 
+                                height = "800px"),
+               fluidRow(
+                   column(width = 4,
+                          selectInput("Category",
+                                      label="Select Subcategory",
+                                      choices = c("",as.character(summary_emission$Sector)))),
+                   column(width = 2,
+                          actionButton("LevelUp",
+                                       "Go up"))
+               )
+               ),
+        # Side panel with the year and GHG graphs
+        column(width=4,
+               fluidRow(
+                   selectInput("Year_value",
+                               label="Select Year",
+                               choices = 2018:1990,
+                               selected = 2018),  
+                   plotlyOutput('Year'),
+                   ),
+               fluidRow(
+                   column(width = 8, selectInput("GHG_type", 
+                                                 label="Select GHG", 
+                                                choices = c("Choose GHG for breakdown" = "",
+                                                            colnames(summary_emission[2:7])),
+                                                multiple = TRUE)),
+                   column(width = 4, actionButton("Update_GHG", 
+                                                  "Update"))
+                   ),
+               plotlyOutput('GHG')
+               )
+        )
+)
+
+# Define server logic required to draw a histogram
+server <- function(input, output, session) {
+    
+    Sector_Frame <- reactiveValues(data = NULL)    
+    Sector_Time <- reactiveValues(data = NULL)
+    Year_value <- reactiveValues(data = NULL)
+
+# observeEvent ------------------------------------------------------------
+    
+    # Attempt to filter by GHG
+    #g <- reactiveValues(filter = NULL)
+    
+    # reactiveVal for tracking levels
+    level <- reactiveVal(0)
+    
+    # Everytime we go deeper, we increment the level
+    observeEvent(input$Category, {
+        newValue <- level() + 1
+        level(newValue)
+        
+        # browser()
+        if (level() == 1) {
+            Sector_Frame$data <- emission_year %>%
+                filter(Sector == input$Category)
+            
+            Sector_Time$data <- time_series_clean %>%
+                filter(Sector == input$Category)
+        }
+    }, priority = 1, ignoreInit = TRUE)
+    
+    
+    observeEvent(input$Year_value, {
+        if (Year_value$data != input$Year_value) {
+            emission_year <- emissions %>%
+                filter(Year == input$Year_value)
+            Sector_Frame$data <- emission_year %>% 
+                filter(Sector == input$Category)
+            }
+    }, ignoreInit = TRUE)
+    
+    
+    # Go back up a level
+    observeEvent(input$LevelUp, {
+        newValue <- level() - 1
+        level(newValue)
+    }, ignoreInit = TRUE)
+    
+    # Change main plot based on GHG filter
+    # observeEvent(input$Update_GHG, {
+    #     g$filter <- input$GHG_type
+    # })
+
+# EventReactives (year_change and category_change) ------------------------
+
+    # Reactive for when we change the year 
+    year_change <- reactive({
+        
+        # Update years we filter for
+        Year_value$data <- input$Year_value
+        
+        emission_year <- emissions %>% 
+            filter(Year == Year_value$data)
+        
+        # Obtain summary information
+        summary_emission <- assignSector(emission_year) %>% 
+            getSummary() %>% 
+            StartEnd()
+        
+        # Update GHG emission for new year
+        total_ghg <- getGHG(summary_emission)
+        
+        # Output required information
+        outputs <- list(emission = summary_emission,
+                        ghg = total_ghg, 
+                        react = "Emission")
+        
+        outputs
+    })
+    
+    # Reactive for when we change the category
+    category_change <- reactive({
+        
+        # Update data frame
+        emission_year <- emissions %>%
+            filter(Year == Year_value$data)
+        
+        # Get data frame for main plot
+        if (level() <= 1) {
+            Cat_Frame <- Sector_Frame$data[apply(as.data.frame(Sector_Frame$data[,1]),
+                                                 1,
+                                                 function(x) str_count(x, fixed("."))) == level(), ] %>%
+                getSummarySectorBreakdown() %>% 
+                StartEnd()
+        } else {
+            check <- substr(input$Category, 2, level()*2)
+            #browser()
+            Cat_Frame <- Sector_Frame$data[apply(as.data.frame(Sector_Frame$data[,1]),
+                                                 1,
+                                                 function(x) (str_count(x, fixed("."))) == level() &
+                                                     substr(x, 1, level()*2 -1) == check), ] %>%
+                getSummarySectorBreakdown() %>% 
+                StartEnd()
+        }
+        
+        # Update GHG values to match new filter    
+        total_ghg <- getGHG(Cat_Frame)
+        
+        # Get data frame for time series
+        if (level() != 1) {
+            
+            Time_Frame <- as.data.frame(Sector_Time$data[Sector_Time$data[,2] == input$Category, ])
+            
+        } else {
+            Time_Frame <- Sector_Time$data[apply(Sector_Time$data[,1],
+                                                 1,
+                                                 function(x) (str_count(x, fixed(".")) == level() & 
+                                                                  substr(x, 1, level()*2+1) == as.character(x))), ]
+            
+        }
+        
+        Time_Frame <- as.data.frame(t(as.matrix(Time_Frame[,4:32])))
+        
+        Time_Frame$Year <- as.numeric(row.names(Time_Frame))
+        
+        names(Time_Frame)[1] <- "Emissions"
+        
+        # Output the required values
+        outputs <- list(cat = Cat_Frame, 
+                        ghg = total_ghg, 
+                        time = Time_Frame,
+                        react = "Sub_Cat")    
+        
+        outputs
+    })
+    
+# Change SelectInput choices ----------------------------------------------
+    # Change selectInput values to one level down when category is chosen
+    observeEvent(input$Category, {
+        Cat_Frame <- category_change()[[1]]
+        
+        updateSelectInput(session, "Category",
+                          choices = c(input$Category, 
+                                      as.character(Cat_Frame$`Name on tab`)))
+    }, ignoreInit = TRUE, priority = -1)
+    
+    # Change selectInput values to one level up when Go up button is chosen 
+    observeEvent(input$LevelUp, {
+        #outputs <- year_change()
+
+        if (level() == 0) {
+            summary_emission <- year_change()[[1]]
+            
+            updateSelectInput(session, "Category",
+                              choices = c(input$Category, 
+                                          as.character(summary_emission$Sector)))
+        } else {
+            summary_emission <- category_change()[[1]]
+            
+            updateSelectInput(session, "Category",
+                              choices = c(input$Category, 
+                                          as.character(summary_emission$`Name on tab`)))
+        }
+    }, ignoreInit = TRUE, priority = -1)
+    
+
+# Output plots ------------------------------------------------------------
+    # Output plot for main emissions graph
+    output$Emissions <- renderPlotly({
+        
+        # if (!is.null(g$filter)) {
+        #         
+        # }
+        # Update dataframe based on what we're plotting
+        
+        # browser()
+        if(!is.null(input$Category) & level() > 0 & nchar(input$Category) > 1) {  
+            # Plotting sector breakdown
+            summary_emission <- category_change()$cat
+            react <- category_change()$react
+        } else {
+            summary_emission <- year_change()$emission
+            react <- year_change()$react
+        }
+        
+        # Plotting functions
+        if(react == "Emission") {
+            e <- summary_emission %>% 
+                ggplot(aes(x=Sector, y=Start, fill=Sector)) + 
+                geom_crossbar(aes(ymin=Start, ymax=End), fatten=0) +
+                labs(title="Emissions from sectors", 
+                     y = "Emissions CO2-e (kilotonnes)")
+        } else if (react == "Sub_Cat"){
+            e <- summary_emission %>% 
+                ggplot(aes(x=`Name on tab`, 
+                           y=Start, 
+                           fill=`Name on tab`)) + 
+                geom_crossbar(aes(ymin=Start,
+                                  ymax=End),
+                              fatten=0) + 
+                labs(title=paste("Emissions from", input$Category), 
+                     y = "Emissions CO2-e (kilotonnes)",
+                     x = input$Category)
+        }
+        
+        e <- e + theme(plot.title = element_text(hjust = 0.5), 
+                       legend.position='none',
+                       axis.text.x = element_text(angle=45, hjust=1)) +
+            geom_hline(yintercept = sum(summary_emission[,1]),
+                       linetype = "dashed") +
+            geom_text(aes(0.7, sum(summary_emission[,1]),
+                          label = "Net", vjust = -1)) +
+            geom_hline(yintercept = sum(summary_emission[1:5,1]),
+                       linetype = "dashed") +
+            geom_text(aes(0.7, sum(summary_emission[1:5,1]),
+                          label = "Gross",
+                          vjust = -1))
+        ggplotly(e) %>% 
+            config(displayModeBar = FALSE)  # Imbed ggplot object into plotly for interactive graph
+    })
+    
+    # Output plot for time series of total emissions
+    output$Year <- renderPlotly({
+        #browser()
+        if(!is.null(input$Category) & level() > 0 & nchar(input$Category) > 1) {
+            time_sector <- category_change()$time
+            
+            t <- time_sector %>% 
+                ggplot(aes(x=Year, y=Emissions)) +
+                geom_bar(stat = "identity", fill="#CC79A7", width = 0.5) + 
+                labs(title = "Select Year",
+                     y = "Emissions (kt CO2-e)") + 
+                theme(plot.title = element_text(hjust = 0.5))
+            
+        } else {
+           
+             t <- time_series_summary %>%
+                ggplot(aes(x=Year, y=Emissions)) + 
+                geom_bar(stat="identity",
+                         fill="#CC79A7", 
+                         width = 0.5) +
+                labs(title="Select Year",
+                     y="Emissions (kt CO2-e)") + 
+                theme(plot.title = element_text(hjust=0.5))
+        }
+
+        ggplotly(t) %>% 
+            config(displayModeBar = FALSE)
+    })
+    
+    # Output plot for GHG breakdowns
+    output$GHG <- renderPlotly({
+        
+        # # Check if we're breaking GHG down by yearly summary or category
+        total_ghg <- year_change()$ghg
+        
+        if(!is.null(input$Category) & level() > 0) {
+            if(nchar(input$Category) > 1) {
+                total_ghg <- category_change()$ghg
+            }
+        }
+        
+        # Plotting functions
+        p <- total_ghg %>% filter(Gas != "Totals") %>%
+            ggplot(aes(x=Gas, y=Emission)) + 
+            geom_bar(stat="identity", 
+                     fill="Dark Green") +
+            labs(title="Select Greenhouse Gas",
+                 x = "Gas Type",
+                 y = "Emissions (kt CO2-e)") +
+            theme(plot.title = element_text(hjust=0.5)) 
+       
+         ggplotly(p) %>%
+            config(displayModeBar = FALSE)
+    })
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)

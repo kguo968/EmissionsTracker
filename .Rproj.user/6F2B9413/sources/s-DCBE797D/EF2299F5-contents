@@ -1,0 +1,71 @@
+library(shiny)
+library(tidyverse)
+
+
+# You have to Adequate your data: You have to create a dete variable
+# in order to make the `dateRangeInput` work. You can do that using
+# `year`, `month` and `day` variables as follow.
+flights <- nycflights13::flights %>% 
+  mutate(
+    date = as.Date(paste(year, month, day, sep = "-"))
+  )
+
+ui <- navbarPage(
+  title = "NYC Flights",
+  tabPanel(
+    title = "Flights",
+    sidebarPanel(
+      h4("Flight Inputs"),
+      # The choices argument should be the unique
+      # list of arilines, not the whole vector with
+      # duplicates
+      selectInput(
+        "airline",
+        label = "Select Airline",
+        choices = unique(flights$carrier), 
+        selected = 'UA' # It is a good idea to select a value
+        # visible when you launch the app
+      ),
+      dateRangeInput(
+        "dates",
+        label = "Dates",
+        start = min(flights$date),
+        end = max(flights$date)
+      ),
+      varSelectInput(
+        "X_Axis",
+        label = "Select Variable 1",
+        data = flights,
+        selected = "date" # selecting one
+      ),
+      varSelectInput(
+        "Y_Axis",
+        label = "Select Variable 2",
+        data = flights,
+        selected = "dep_delay" # selecting one
+      )
+    ),
+    
+    mainPanel(
+      plotOutput("plot")
+    )
+    
+  )
+  
+)
+
+server <- function(input, output, session) {
+  
+  output$plot <- renderPlot({
+    flights %>% 
+      # Use your inputs to filter the data
+      filter(date >= input$dates[1], date <= input$dates[2], carrier == input$airline) %>% 
+      # since the selectImput create a character element, you should use 
+      # ase_string() to map the x an y variables
+      ggplot(aes_string(x = input$X_Axis, y = input$Y_Axis)) +
+      geom_point()
+  })
+  
+}
+
+shinyApp(ui, server)

@@ -1,0 +1,51 @@
+{
+    "debugBreakpointsState" : {
+        "breakpoints" : [
+            {
+                "editor_line_number" : 270,
+                "editor_state" : 1,
+                "function_name" : "toplevel",
+                "function_steps" : "",
+                "id" : 6,
+                "is_package_breakpoint" : false,
+                "is_pending_debug_completion" : false,
+                "line_number" : 270,
+                "needs_updated_steps" : false,
+                "package_name" : "",
+                "path" : "//anchor/gis$/Projects_KevinG/Emissions Tracker/app.R",
+                "state" : 1,
+                "type" : 1
+            },
+            {
+                "editor_line_number" : 271,
+                "editor_state" : 1,
+                "function_name" : "toplevel",
+                "function_steps" : "",
+                "id" : 7,
+                "is_package_breakpoint" : false,
+                "is_pending_debug_completion" : false,
+                "line_number" : 271,
+                "needs_updated_steps" : false,
+                "package_name" : "",
+                "path" : "//anchor/gis$/Projects_KevinG/Emissions Tracker/app.R",
+                "state" : 1,
+                "type" : 1
+            },
+            {
+                "editor_line_number" : 1087,
+                "editor_state" : 1,
+                "function_name" : "toplevel",
+                "function_steps" : "",
+                "id" : 112,
+                "is_package_breakpoint" : false,
+                "is_pending_debug_completion" : false,
+                "line_number" : 1087,
+                "needs_updated_steps" : true,
+                "package_name" : "",
+                "path" : "C:/Working/Emissions Tracker/app.R",
+                "state" : 1,
+                "type" : 1
+            }
+        ]
+    }
+}

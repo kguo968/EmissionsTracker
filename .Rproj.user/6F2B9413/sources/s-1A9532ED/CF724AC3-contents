@@ -1,0 +1,60 @@
+source("library.R")
+
+# Set datalake credentials
+datalake.set_credentials()
+
+# Load Data ---------------------------------------------------------------
+
+# Site match dataframe
+s3load(object = "site_name_match_df.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+# Load ER report
+s3load(object = "ER_air_data_2019_1112.rdata", bucket = "data-pipeline-projects/AirQuality/Output") 
+
+# Load Pollutant data
+CO_previous_file <- s3read_using(read.csv,
+                                 object = "carbon-monoxide-concentrations-199617.csv",
+                                 bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-carbon-monoxide-concentrations-199617-CSV")
+
+Ozone_previous_file_16 <- s3read_using(read.csv, 
+                                       object = "ground-level-ozone-concentrations-auckland-200116.csv", 
+                                       bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-ground-level-ozone-concentrations-auckland-200116-CSV")
+
+NO2_previous_file <- s3read_using(read.csv, 
+                                  object = "nitrogen-dioxide-concentrations-council-and-unitary-authorit.csv", 
+                                  bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-nitrogen-dioxide-concentrations-council-and-unitary-authorit-CSV")
+
+PM10_previous_file <- s3read_using(read.csv,
+                                   object = "pm10-concentrations-200617.csv",
+                                   bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-pm10-concentrations-200617-CSV")
+
+PM25_previous_file <- s3read_using(read.csv,
+                                   object = "pm25-concentrations-200817.csv",
+                                   bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-pm25-concentrations-200817-CSV")
+
+SO2_previous_file_17 <- s3read_using(read.csv, 
+                                     object = "sulphur-dioxide-concentrations-200817.csv",
+                                     bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-sulphur-dioxide-concentrations-200817-CSV")
+
+# Only get 'required' data (for this task) from 2019 air data
+ER_req <- ER_air_data_2019 %>%
+  select(council, site, date, time, aggparameter, value)
+
+ER_req %>%
+  group_by(aggparameter) %>%
+  summarise(n())
+
+
+# PM2.5 -------------------------------------------------------------------
+# Restructure certain columns of dataset
+PM25_previous_file$date <- as.Date(PM25_previous_file$date)
+names(PM25_previous_file)[1] <- "Site"
+
+# Analysis
+PM25_compared <- ER_req %>%
+  filter(aggparameter == "PM25 - Daily average") %>%
+  select(-time) %>%
+  left_join(site_name_match_df, by = c("site" = "site_name")) %>%
+  left_join(PM25_previous_file, by = c("site_old" = "Site", "date"))
+
+summary(PM25_compared)

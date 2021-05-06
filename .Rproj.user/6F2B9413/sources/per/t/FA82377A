@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1610068079324.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "FA82377A",
+    "lastKnownWriteTime" : 7598543875853023333,
+    "last_content_update" : 1610068079324,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "A4CED908",
+        "caption" : "total_ghg",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=total_ghg&cache_key=A4CED908",
+        "displayedObservations" : 6,
+        "environment" : "",
+        "expression" : "total_ghg",
+        "object" : "total_ghg",
+        "preview" : 0,
+        "totalObservations" : 6,
+        "variables" : 2
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

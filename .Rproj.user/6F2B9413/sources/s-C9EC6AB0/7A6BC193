@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1607394748960.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "7A6BC193",
+    "lastKnownWriteTime" : 2238256672200,
+    "last_content_update" : 1607394748960,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "9CE40E9E",
+        "caption" : "SectorTimeSummary",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=SectorTimeSummary&cache_key=9CE40E9E",
+        "displayedObservations" : 3,
+        "environment" : "",
+        "expression" : "SectorTimeSummary",
+        "object" : "SectorTimeSummary",
+        "preview" : 0,
+        "totalObservations" : 3,
+        "variables" : 33
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

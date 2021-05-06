@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1610483504137.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "C9C0538B",
+    "lastKnownWriteTime" : 2314885530450141753,
+    "last_content_update" : 1610483504137,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "FF2DB12B",
+        "caption" : "time_series_data",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=time_series_data&cache_key=FF2DB12B",
+        "displayedObservations" : 946,
+        "environment" : "",
+        "expression" : "time_series_data",
+        "object" : "time_series_data",
+        "preview" : 0,
+        "totalObservations" : 946,
+        "variables" : 32
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 5,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

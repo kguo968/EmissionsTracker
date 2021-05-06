@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1611706571663.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "DC81B1AD",
+    "lastKnownWriteTime" : 1611264285,
+    "last_content_update" : 1611264285,
+    "path" : "//anchor/gis$/Projects_KevinG/Emissions Tracker/app.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "532,0",
+        "scrollLine" : "510"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 7,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

@@ -1,0 +1,557 @@
+library(shiny)
+library(readxl)
+library(tidyverse)
+library(plotly)
+library(plyr)
+library(mfePubs)
+
+source("helper.R")
+
+# Import all emissions data and store as single data frame
+if (!file.exists("emissions.rda")) {
+    getSheet()
+}
+
+load(file = "emissions.rda")
+
+# Manually replace NA Layer in hierarchy value with correct value (checked in excel sheet)
+emissions$`Layer in hierarchy` <- replace_na(emissions$`Layer in hierarchy`, 6)
+
+# Get initial year (2018)
+emission_year <- emissions %>% 
+    filter(Year == 2018)
+
+# Extract summary information 
+summary_emission <- emission_year %>%
+    filter(`Layer in hierarchy` == 1) %>%
+    getSummary() %>% 
+    StartEnd()
+
+# Import time series data
+time_series_data <- read_xlsx("Data/emissions data.xlsx", range = "A11:AF1072")[-c(178:261,300:325,539,1053:1056), ]
+
+# Reformat and clean time series data
+time_series_summary <- timeSummary(time_series_data)    # Summary of total emissions
+time_series_clean <- cleanSheet(time_series_data)   # Time series breakdown of individual components 
+
+# Get GHG data frame
+total_ghg <- getGHG(summary_emission)
+
+# Define global variable to track current year
+currentYear <<- 2018
+
+# Define UI for application that draws a histogram
+ui <- fluidPage(
+
+    # Application title
+    titlePanel("New Zealand's Interactive Emissions Tracker"),
+    
+    # Main panel with the emissions graph
+    fluidRow(
+        column(width=8,
+                   plotOutput('Emissions', 
+                              height = "800px", 
+                              click = "Emissions_click"),
+               fluidRow(
+                   column(width = 2,
+                          actionButton("LevelUp",
+                                       "Go up")),
+                   column(width = 10,
+                          uiOutput("Sector_trace"))
+                   )
+               ),
+        
+        # Side panel with the year and GHG graphs
+        column(width=4,
+               fluidRow(
+                   uiOutput("Year_value"),  
+                   plotOutput('Year',
+                              click = "Year_click"),
+                   ),
+               fluidRow(
+                   column(width = 8, 
+                          uiOutput("GHG_selected")),
+                   column(width = 4,
+                          actionButton("Reset_GHG",
+                                       "Reset")),
+               plotOutput('GHG', 
+                          click = "GHG_click")
+               )
+        )
+        )
+    )
+
+# Define server logic required to draw a histogram
+server <- function(input, output, session) {
+    
+
+# reactiveValues and reactiveVal ------------------------------------------
+    # Provide all required reactiveValues
+    Emission_year <- reactiveValues(data = emission_year)
+    Sector_Frame <- reactiveValues(data = NULL)    
+    Category_Selector <- reactiveValues(selected = NULL, previous = vector(), sector = NULL)
+    Year_Selector <- reactiveValues(selected = NULL,
+                                    toHighlight = c(rep(FALSE, dim(time_series_summary)[1]-1), TRUE))
+    check <- reactiveValues(value = NULL)
+    GHG_Selector <- reactiveValues(selected = vector(),
+                                   toHighlight = rep(TRUE, length(total_ghg$Gas)))
+
+    # reactiveVal for tracking levels
+    level <- reactiveVal(0)
+    
+# observeEvent ------------------------------------------------------------
+    
+    # Assign name based on selected bar input
+    observeEvent(input$Emissions_click, {
+        if (level() == 0) {
+            # Obtain and assign selected bar
+            Category_Selector$selected <- summary_emission$Sector[round(input$Emissions_click$x)]
+            
+            # Update dataframe based on selected sector
+            Sector_Frame$data <- Emission_year$data %>% 
+                filter(Sector == as.character(Category_Selector$selected))
+            
+            Category_Selector$sector <- as.character(Category_Selector$selected)
+        } else {
+            # Determine if 'check' has a value or not
+            if (is.null(check$value)) {
+                # Filter for sector using only layer in hierarchy if not
+                sector_level <- Sector_Frame$data %>%
+                    filter(`Layer in hierarchy` == (level() + 1))
+            } else {
+                # Filter for sector using layer in hierarchy and link to crf import file 
+                sector_level <- Sector_Frame$data %>%
+                    filter(`Layer in hierarchy` == (level() + 1))
+                sector_level <- sector_level[apply(as.data.frame(sector_level[,1]),
+                                                   1,
+                                                   function(x) substr(x, 1, level()*2 - 1) == check$value), ]
+            }
+            
+            # Update previously selected and currently selected categories
+            Category_Selector$previous <- c(Category_Selector$previous, as.character(Category_Selector$selected))
+            Category_Selector$selected <- sector_level$`Name on tab`[round(input$Emissions_click$x)]
+            
+        }
+        
+        # Increment level counter
+        newValue <- level() + 1
+        level(newValue)
+        
+    }, priority = 1) 
+        
+    # Observe event for changing year
+    observeEvent(input$Year_click, {
+        Year_Selector$selected <- round(input$Year_click$x)
+        Year_Selector$toHighlight <- time_series_summary$Year %in% Year_Selector$selected
+    })
+    
+    # Go back up a level
+    observeEvent(input$LevelUp, {
+        
+        # Only able to go up a level if we're not at the base level
+        if (level() > 0) {
+            # Decrease level by 1
+            newValue <- level() - 1
+            
+            # Update value 
+            level(newValue)
+            
+            if (level() == 0) {
+                # Reset selected category once returned to 'base' level
+                Category_Selector$selected <- NULL
+            } else {
+                if (level() == 1) {
+                    check$value <- NULL
+                }
+                
+                # Update current with previously selected
+                Category_Selector$selected <- Category_Selector$previous[level()]
+                Category_Selector$previous <- Category_Selector$previous[-level()]
+            }
+            
+        }
+        
+    }, ignoreInit = TRUE)
+    
+    # Observe event for choosing GHG
+    observeEvent(input$GHG_click, {
+        
+        ghg <- as.character(total_ghg$Gas[round(input$GHG_click$x)])
+        
+        if (!ghg %in% GHG_Selector$selected) {
+            # Add GHG type if not already present
+            GHG_Selector$selected <- c(GHG_Selector$selected, ghg)
+        } else {
+            # Remove GHG type if already present 
+            GHG_Selector$selected <- c(GHG_Selector$selected[-match(ghg, GHG_Selector$selected)])
+        }
+        
+        if (is_empty(GHG_Selector$selected)) {
+            GHG_Selector$toHighlight <- rep(TRUE, length(total_ghg$Gas))
+        } else {
+            GHG_Selector$toHighlight <- total_ghg$Gas %in% GHG_Selector$selected    
+        }
+        
+    }, priority = 1)
+    
+    # Reset GHG 
+    observeEvent(input$Reset_GHG, {
+        
+        GHG_Selector$selected <- vector()
+        GHG_Selector$toHighlight <- rep(TRUE, length(total_ghg$Gas))
+        
+    }, ignoreInit = TRUE, priority = 0)
+    
+# Reactives (category_change and time_sector_change) ------------------------
+    
+    # Reactive for when we change the category
+    category_change <- reactive({
+        
+        # Check if we're in the 1st layer
+        if (level() <= 1) {
+            # Filter for appropriate sector and acquire summary data
+            emission_sector <- Sector_Frame$data %>% 
+                filter(`Layer in hierarchy` == 2) %>%
+                getSummarySectorBreakdown() %>% 
+                StartEnd()
+        } else {
+            # Set the substring to check for
+            check$value <- substr(Category_Selector$selected, 2, level()*2)
+            
+            # Filter for appropriate subcategories and acquire summary data
+            emission_sector <- Sector_Frame$data[apply(Sector_Frame$data,
+                                                 1,
+                                                 function(x) x[[10]] == level()+1 &
+                                                     substr(x[[1]], 1, level()*2 -1) == check$value), ] %>%
+                getSummarySectorBreakdown() %>%
+                StartEnd()
+        }
+
+        emission_sector
+    })
+    
+    # Reactive for when we change the time sector (used for year graph)
+    time_sector_change <- reactive({
+        
+        if (level() == 1) {     # Check if we're in first level
+            # Obtain only 1st level sectors and filter for desired
+            time_sector <- time_series_clean[!duplicated(time_series_clean$Sector), ] %>%
+                filter(Sector == Sector_Frame$data[1,11])
+        } else {
+            
+            # Filter by the exact Name on tab
+            time_sector <- time_series_clean %>%
+                filter(`Name on tab` == as.character(Category_Selector$selected))
+        }
+        
+        time_sector
+    })
+    
+    # Reactive for when we change the time sector with GHG filters
+    time_sector_GHG <- reactive({
+        
+        if (level() == 1) {         # Check if we're in the first level
+            
+            # Obtain time series for 1st level and select only desired columns
+            time_sector <- emissions %>%
+                filter(`Layer in hierarchy` == 1, Sector == Sector_Frame$data[1,11]) %>%
+                select(all_of(GHG_Selector$selected), Year)
+        } else {
+            
+            # Filter by the exact Name on tab
+            time_sector <- emissions %>%
+                filter(`Name on tab` == as.character(Category_Selector$selected)) %>%
+                select(all_of(GHG_Selector$selected), Year)
+        }
+        
+        time_sector
+    })
+    
+    # Reactive for when we change the year chosen at the base level
+    year_change <- reactive({
+        # Update Emission_year reactive with new year selected
+        Emission_year$data <- emissions %>%
+            filter(Year == Year_Selector$selected)
+        
+        # Update summary emission based on new year
+        summary_emission <- Emission_year$data %>%
+            filter(`Layer in hierarchy` == 1) %>%
+            getSummary() %>% 
+            StartEnd()
+        
+        summary_emission
+    })
+    
+    #Reactive for when we change the GHGs chosen
+    GHG_change <- reactive({
+        
+        # Get list of currently 'active' GHG to filter for
+        filter_for <- GHG_Selector$selected
+        
+        # Apply a different function based on the level in the hierarchy we're currently at
+        if (level() == 0) {         # Base level
+            filtered_GHG <- Emission_year$data %>%
+                assignSector() %>%
+                select(colnames(Emission_year$data[,c(1,2)]), all_of(filter_for), 10:12)
+            
+        } else if (level() == 1) {          # 1st level (chosen Sector)
+          filtered_GHG <- Sector_Frame$data %>%
+              select(colnames(Sector_Frame$data[,c(1,2)]), all_of(filter_for), 10:12) %>%
+              filter(`Layer in hierarchy` == 2) 
+          
+        } else {        # Other levels (deeper dive into different sectors)
+            
+            # Filter based on the section we're in
+            filtered_GHG <- Sector_Frame$data %>%
+                select(colnames(Sector_Frame$data[,c(1,2)]), all_of(filter_for), 10:12)
+            
+            # Filter through correct subcategories
+            filtered_GHG <- filtered_GHG[apply(filtered_GHG,
+                                               1,
+                                               function(x) x[[(3+length(GHG_Selector$selected))]] == level() + 1 &
+                                                   substr(x[[1]], 1, level()*2 - 1) == check$value), ]
+        }
+        
+        col_num <- dim(filtered_GHG)[2]
+        
+        # Reformat dataframe to obtain summary data
+        filtered_GHG <- add_column(filtered_GHG, 
+                                   Totals = rowSums(filtered_GHG[,-c(1:2,col_num-2,col_num-1,col_num), 
+                                                                 drop = FALSE]),
+                                   .after = "Name on tab")
+        
+        # Use appropriate functions to obtain summary data for plotting
+        if (level() == 0) {
+            filtered_GHG <- filtered_GHG %>% 
+                getSummary() %>%
+                StartEnd()    
+        } else {
+            filtered_GHG <- filtered_GHG %>%
+                getSummaryGHG(length(GHG_Selector$selected)) %>%
+                StartEnd()
+        }
+        
+        filtered_GHG
+    })
+
+# Output plots ------------------------------------------------------------
+    
+    # Output plot for main emissions graph
+    output$Emissions <- renderPlot({
+        
+        # Apply different plotting command based on level of hierarchy we're currently at
+        if (level() <= 0) {         # Base level
+            
+            if (!is.null(Year_Selector$selected)) {      # Check if year has changed from default (2018)
+                summary_emission <- year_change()
+            }
+
+            if (!is_empty(GHG_Selector$selected)) {      # Check if GHG filter exists
+                summary_emission <- GHG_change()
+            }
+            
+            # Begin formatting ggplot
+            e <- summary_emission %>% 
+                ggplot(aes(x = Sector,
+                           y = Start,
+                           fill = Sector))+ 
+                geom_crossbar(aes(ymin = Start, ymax = End), 
+                              fatten = 0,
+                              position = position_dodge()) + 
+                labs(title = "Emissions from Sectors", 
+                     y = "Emissions CO2-e (kilotonnes)") + theme_mfe() + scale_fill_mfe(direction = 1)  # Apply mfe graph theme and colours
+
+                        
+        } else {        # Non-base level
+            if (!is.null(Year_Selector$selected) ) {            # Check if year is different from previous/default
+                if (Year_Selector$selected != currentYear) {
+                    
+                    # Update year for emission data
+                    Emission_year$data <- emissions %>%         
+                        filter(Year == Year_Selector$selected)
+                    
+                    # Update sector data for the new year
+                    Sector_Frame$data <- Emission_year$data %>% 
+                        filter(Sector == Category_Selector$sector)
+                    
+                    # Update the current year
+                    currentYear <<- Year_Selector$selected
+                }
+            }
+            
+            # Get appropriate sub category dataframe for the given year
+            summary_emission <- category_change()
+            
+            # Check if any filters for GHG
+            if (!is_empty(GHG_Selector$selected)) { 
+                
+                # If so, update dataframe
+                summary_emission <- GHG_change()
+            }
+            
+            # Begin formatting ggplot
+            e <- summary_emission %>%
+                ggplot(aes(x = `Name on tab`,
+                           y = Start,
+                           fill = `Name on tab`)) + 
+                geom_crossbar(aes(ymin = Start,
+                                  ymax = End), 
+                              fatten = 0,
+                              position = position_dodge()) + 
+                labs(title = paste("Emissions from", as.character(Category_Selector$selected)),
+                     y = "Emissions CO2-e (kilotonnes)",
+                     x = as.character(Category_Selector$selected)) + theme_mfe() + scale_fill_mfe(direction = 1) + 
+                geom_text(aes(label = paste0(round(Totals/max(End), 2)*100, '%'), fontface = "bold"),
+                          position = position_dodge(width = 0.9),
+                          vjust = -0.5,
+                          size = 8)
+        }
+        
+        # Finish ggplot 
+        e + theme(plot.title = element_text(hjust = 0.5), 
+              legend.position = 'none',
+              axis.text.x = element_text(angle = 45, hjust = 1)) +
+            scale_y_continuous(expand = expansion(mult = c(0, 0.1)),
+                               breaks = pretty(c(min(summary_emission$Start), 
+                                                 max(summary_emission$End)),
+                                               n = 10))
+    })
+    
+    # Output plot for time series of total emissions
+    output$Year <- renderPlot({
+        
+        # Check if any category is chosen
+        if (is.null(Category_Selector$selected)) {      # No category chosen
+            
+            # Check if any filtering required for GHG
+            if (!is_empty(GHG_Selector$selected)) {
+                
+                # If so, filter for required GHGs
+                t <- emissions %>% 
+                    filter(`Layer in hierarchy` == 0) %>%
+                    select(all_of(GHG_Selector$selected), Year)
+                
+                # Create new Emissions column for plotting purposes
+                t <- t %>% mutate(Emissions = rowSums(t[,-dim(t)[2], drop = FALSE])) %>% dplyr::arrange(-row_number())
+            } else {
+                # If not, use imported time series summary dataframe
+                t <- time_series_summary
+            }
+
+        } else {        # A category is chosen
+            
+            # Check for any filtering requirements for GHG
+            if (!is_empty(GHG_Selector$selected)) { 
+                
+                # If so, filter for required GHGs
+                time_sector <- time_sector_GHG()
+                
+                # Create new Emissions columns for plotting purposes
+                time_sector <- time_sector %>% 
+                    mutate(Emissions = rowSums(time_sector[, -dim(time_sector)[2], drop = FALSE]))
+                
+            } else {
+                # If not, filter for desired subcategory 
+                time_sector <- time_sector_change()
+                
+                # Restructure dataframe for plotting
+                time_sector <- as.data.frame(t(as.matrix(time_sector[,4:32])))
+                time_sector$Year <- as.numeric(row.names(time_sector))
+                names(time_sector)[1] <- "Emissions"
+                
+            }
+                        
+            t <- time_sector 
+        }
+        
+        # Create ggplot based on required dataframe
+        # browser()
+        t %>%
+            ggplot(aes(x = Year, y = Emissions, 
+                       fill = ifelse(Year_Selector$toHighlight, yes = "Yes", no = "No"))) +
+            geom_bar(stat="identity",
+                     width = 0.5) +
+            labs(title="Select Year",
+                 y="Emissions (kt CO2-e)") +
+            scale_fill_manual(values = c("Yes" = "mediumvioletred", "No" = "plum2")) +
+            theme(plot.title = element_text(hjust=0.5),
+                  legend.position = 'none') +
+            scale_x_continuous(expand = c(0,0),
+                               breaks = pretty(c(1990,2018),
+                                               n = 5))
+    })
+    
+    # Output plot for GHG breakdowns
+    output$GHG <- renderPlot({
+        
+        # Check if a Sector is chosen
+        if (!is.null(Category_Selector$selected)) {
+            # If so, update summary with new category/sub category 
+            summary_emission <- category_change()
+            
+            # Update ghg dataframe to match new emission summary
+            total_ghg <- getGHG(summary_emission)
+            
+        } else if (!is.null(Year_Selector$selected)) {
+            # Check if year has changed from previous
+            if (Year_Selector$selected != currentYear) {
+                
+                # If so, update summary with new year
+                summary_emission <- year_change()
+                
+                # Update ghg dataframe to match new emission summary
+                total_ghg <- getGHG(summary_emission)
+            }
+        }
+        
+        # Plotting function
+        total_ghg %>% filter(Gas != "Totals") %>%
+            ggplot(aes(x = Gas, 
+                       y = Emission,
+                       fill = ifelse(GHG_Selector$toHighlight, 
+                                     yes = "Yes",
+                                     no = "No"))) + 
+            geom_bar(stat = "identity") +
+            labs(title="Select Greenhouse Gas",
+                 x = "Gas Type",
+                 y = "Emissions (kt CO2-e)") +
+            scale_fill_manual(values = c("Yes" = "green4",
+                                         "No" = "palegreen")) + 
+            theme(plot.title = element_text(hjust=0.5), 
+                  legend.position = 'none')
+    })
+    
+    # Output textInput for showing which Year is currently selected
+    output$Year_value <- renderUI({
+        textInput(inputId = "Year_label", 
+                  label = "Selected Year ",
+                  value = Year_Selector$selected,
+                  placeholder = "Default Year 2018")
+    })
+    
+    # Output selectInput for showing which GHG/s are filtered for
+    output$GHG_selected <- renderUI({
+        selectInput(inputId = "GHG_label",
+                    label = NULL,
+                    choices = c("Select GHG to filter for" = "", GHG_Selector$selected),
+                    selected = GHG_Selector$selected,
+                    multiple = TRUE,
+                    width = '100%')
+    })
+    
+    # Output selectInput for tracing the sectors we've gone down 
+    output$Sector_trace <- renderUI({
+        selectInput(inputId = "SectorTrace_label",
+                    label = NULL,
+                    choices = c("Trace for Sectors" = "" ,
+                                Category_Selector$previous,
+                                as.character(Category_Selector$selected)),
+                    selected = c(Category_Selector$previous,
+                                 as.character(Category_Selector$selected)),
+                    multiple = TRUE,
+                    width = '100%')
+    })
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)

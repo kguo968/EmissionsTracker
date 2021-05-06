@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1609903249409.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "29|29|38|0|\n52|35|56|0|\n58|25|85|0|\n",
+    "hash" : "3335403689",
+    "id" : "C0C69469",
+    "lastKnownWriteTime" : 1609973038,
+    "last_content_update" : 1609973038573,
+    "path" : "C:/Working/Emissions Tracker/helper.R",
+    "project_path" : "helper.R",
+    "properties" : {
+        "cursorPosition" : "96,63",
+        "scrollLine" : "0",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

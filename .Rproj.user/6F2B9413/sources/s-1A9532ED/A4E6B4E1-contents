@@ -1,0 +1,78 @@
+
+
+# Packages required
+
+requiredPackages = c(
+  "readxl",
+  "plyr",
+  "dplyr",
+  "ggplot2",
+  "stringr",
+  "sf",
+  "leaflet",
+  "tidyverse",
+  "plotly",
+  "DT",
+  "viridis",
+  "RColorBrewer",
+  "leaflet.extras",
+  "spdplyr",
+  "mapdata",
+  "jsonlite",
+  "anytime",
+  "XML",
+  "xml2",
+  "dplyr",
+  "tidyverse",
+  "stringr",
+  "lubridate",
+  "methods",
+  "httr",
+  "plyr",
+  "RCurl",
+  "htmltab",
+  "curl",
+  "data.table",
+  "RApiDatetime",
+  "sp",
+  "leaflet",
+  "ggplot2",
+  "ggmap",
+  "maps",
+  "mapdata",
+  "sf",
+  "aws.s3",
+  "Datalake",
+  "maptools",
+  "rgeos",
+  "rgdal",
+  # "xlsx",
+  "readxl",
+  "plotly",
+  "reshape",
+  "shiny",
+  # "ClassInt",
+  "tmap",
+  "rsconnect",
+  "tidyr",
+  "scales",
+  "crosstalk",
+  "purrr",
+  "fpp2",
+  "zoo",
+  "mblm",
+  "rpivotTable",
+  "shinyjs",
+  "qdapRegex",
+  "magrittr"
+  )
+
+# Check whether the package(s) is insallled, if not, install it
+
+for(p in requiredPackages){
+  if(!require(p,character.only = TRUE)) install.packages(p, dependencies =TRUE)
+  library(p,character.only = TRUE)
+  message(!require(p,character.only = TRUE))
+}
+
+

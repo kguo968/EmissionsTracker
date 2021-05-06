@@ -1,0 +1,130 @@
+sectorAllocate <- function(x) {
+  # Helper function for allocating the Sector for each observation
+  sectorName <- switch(as.character(x),
+                       "1" = "Energy",
+                       "2" = "Industrial Processes and Product Use",
+                       "3" = "Agriculture",
+                       "4" = "LULUCF",
+                       "5" = "Waste",
+                       "6" = "Tokelau",
+                       "-" = "LULUCF",
+                       "S" = "Totals") 
+}
+
+getSheet <- function() {
+  # Function which extracts all the useful observations from the provided excel file
+  sheets <- excel_sheets("Data/emissions data.xlsx")[-c(1,31)]
+  list_emissions <- lapply(sheets, function(x) read_excel("Data/emissions data.xlsx", sheet = x,
+                                                          range = c("A11:AN1072"))[-c(178:261,300:325,539,1053:1056),
+                                                                                   c(1:4,11, 18, 26, 27, 29, 40)])
+  
+  for (i in 1:length(sheets)) {
+    list_emissions[[i]] <- cleanSheet(list_emissions[[i]])
+    list_emissions[[i]]$Year <- as.double(sheets[i])
+    }
+    
+  emissions <- rbind.fill(list_emissions)  
+  save(emissions, file = "emissions.rda")
+} 
+
+assignSector <- function(x) {
+  # Assigns the numeric value for an observations
+  summary_emission <- x %>% filter(`Link to CRF import file` == "1"|
+                                     `Link to CRF import file` == "2"|
+                                     `Link to CRF import file` == "3"|
+                                     `Link to CRF import file` == "4"|
+                                     `Link to CRF import file` == "5"|
+                                     `Link to CRF import file` == "6")
+  summary_emission
+}
+
+getSummary <- function(x) {
+  summary <- x[,3:(dim(x)[2]-1)]
+  factor_order <- c("Energy", "Industrial Processes and Product Use", "Agriculture","Waste","Tokelau","LULUCF")
+  summary <- summary %>% mutate(Sector = factor(Sector, levels=factor_order)) %>% arrange(Sector)
+  summary
+}
+
+getSummarySectorBreakdown <- function(x) {
+  summary <- x[,2:9]
+  summary <- summary[, c(2:8,1)]
+}
+
+getSummaryGHG <- function(x, num) {
+  # browser()
+  summary <- x[,2:(3+num)]
+  summary <- summary[,c(2:(2+num), 1)]
+}
+
+StartEnd <- function(x) {
+  row_num <- dim(x)[1]
+  col_num <- dim(x)[2]
+  
+  # Set the 'Start' values for each of the sectors
+  x$Start <- 0 
+  
+  if (row_num == 1) {
+    x$End <- x$Totals
+    
+  } else {
+    
+    for (i in 2:row_num) {
+      x[i,(col_num+1)] <- x[i-1,(col_num+1)] + x[i-1,1]
+    }
+    
+    # Set the 'End' values for each of the sectors
+    x$End <- 0
+    
+    for (j in 1:(row_num-1)) {
+      x[j,col_num+2] <- x[j+1,col_num+1]
+    }
+    
+    x[row_num,col_num+2] <- x[row_num-1, col_num+2] + x[row_num,1] 
+  }
+  
+  x
+}
+
+getGHG <- function(x) {
+  total_ghg <- colSums(x[,2:7]) %>% as.data.frame()
+  total_ghg$Gas <- row.names(total_ghg)
+  
+  # Rename column
+  names(total_ghg)[1] <- "Emission"
+  
+  # Reorder the factor to match the current tracker
+  ghg_factor_order <- c("Total CO2", "Total CH4", "Total N2O", "HFCs","PFCs","SF6","Totals")
+  total_ghg <- total_ghg %>% mutate(Gas = factor(Gas, levels = ghg_factor_order)) %>% arrange(Gas)
+  total_ghg
+}
+
+# plot_floatingBar <- function(x, y) {
+#   e <- x %>% ggplot(aes(x=y, y=Start, fill=y)) + 
+#     geom_crossbar(aes(ymin=Start, ymax=End), fatten=0)
+#   e
+# }
+
+cleanSheet <- function(x) {
+  emissions <- x
+  col_len <- dim(emissions)[2]
+  emissions <- emissions[-2,]
+  emissions[emissions=="Exclude"] <- '0'
+  emissions[, -c(1,2)] <- lapply(emissions[,-c(1,2)], function(x) unlist(as.numeric(x)))
+  emissions[rowSums(is.na(emissions)) > 0, 4:9] <- 0
+  emissions <- emissions[apply(emissions[,-c(1:2, 10)], 1, function(x) !all(x==0)), ]
+  emissions[,col_len+1] <- apply(emissions[,1], 1, function(x) substr(x,1,1))
+  names(emissions)[3] <- "Totals"
+  names(emissions)[col_len+1] <- "Sector"
+  for (i in 1:dim(emissions)[1]) {
+    emissions[i, col_len+1] <- (sectorAllocate(emissions[i,col_len+1]))
+  }
+  emissions
+}
+
+timeSummary <- function(x) {
+  time_series_summary <- as.data.frame(t(as.matrix(x[1,4:32])))
+  time_series_summary$Year <- as.double(row.names(time_series_summary))
+  names(time_series_summary)[1] <- "Emissions"
+  time_series_summary$Emissions <- as.numeric(as.character(time_series_summary$Emissions))
+  time_series_summary
+}

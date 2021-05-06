@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1610483281951.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "27E6AA33",
+    "lastKnownWriteTime" : 8246223293474941986,
+    "last_content_update" : 1610483281951,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "63CCCF24",
+        "caption" : "emissions",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=emissions&cache_key=63CCCF24",
+        "displayedObservations" : 14421,
+        "environment" : "",
+        "expression" : "emissions",
+        "object" : "emissions",
+        "preview" : 0,
+        "totalObservations" : 14421,
+        "variables" : 12
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 4,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

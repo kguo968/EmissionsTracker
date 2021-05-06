@@ -1,0 +1,2055 @@
+#Load/Install libraries-----------------------------------------------------------
+source("library.R")
+
+options(digits.secs=6)
+anytime::addFormats("%d.%m.%Y")
+
+
+# Set working directory ####---------------------------------------------------
+# setwd("E:/Data Pipeline/Air Domain Pilot Query")
+
+# Set Datalake credentials, it looks by default in home directoty for ~/credentials.csv
+datalake.set_credentials()
+
+# Functions ####--------------------------------------------------------
+
+source("function.R")
+
+# Source -------------------------------------------------------
+
+
+s3load("NationalreferenceListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("HilltopAQmeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("KistersAQmeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("HilltopMeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("KistersMeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("BoPAQmeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load('NationalAQMeasurementListDF.rdata', bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("AQstatusTrueDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+councilCSV <-  s3read_using(read.csv, object = 's3://data-pipeline-projects/AirQuality/RawData/CouncilPath.csv')
+hilltopcouncilCSV <- s3read_using(read.csv, object = 's3://data-pipeline-projects/AirQuality/RawData/HilltopCouncilPaths.csv')
+
+#Fix the referencelist url and AirQurl for Northland
+councilCSV$Reference.list.URL <- as.character(councilCSV$Reference.list.URL)
+councilCSV$Reference.list.URL[councilCSV$Council == "Northland"] <- "http://hilltop.nrc.govt.nz/AirQualityArchive.hts?Service=WFS&Request=GetFeature&TypeName=MonitoringSiteReferenceData&version=1.1.0"
+hilltopcouncilCSV$Reference.list.URL <- as.character(hilltopcouncilCSV$Reference.list.URL)
+hilltopcouncilCSV$Reference.list.URL[hilltopcouncilCSV$Council == "Northland"] <- "http://hilltop.nrc.govt.nz/AirQualityArchive.hts?Service=WFS&Request=GetFeature&TypeName=MonitoringSiteReferenceData&version=1.1.0"
+hilltopcouncilCSV$AirQurl <- as.character(hilltopcouncilCSV$AirQurl)
+hilltopcouncilCSV$AirQurl[hilltopcouncilCSV$Council == "Northland"] <- "AirQualityArchive"
+
+
+# [[ All AQ Site ]] ----
+
+check_df <- NationalreferenceListDF %>%
+  select(council, siteid, councilsiteid, airquality, airsitecurrent, AQSite) %>%
+  mutate(airquality = ifelse(airquality %in% c("Yes", "YES", "true", "yes"), "Y", "N"),
+         airsitecurrent = ifelse(airsitecurrent %in% c("Yes", "YES", "true"), "Y", "N"))
+
+# If we choose all aq sites
+AQstatusTrueDF <- NationalreferenceListDF[ which(NationalreferenceListDF$airquality  %in% c("Yes", "YES", "true", "yes")), ] 
+AQstatusTrueDF$lat <- as.numeric(gsub( " .*$", "", AQstatusTrueDF$shape2))
+AQstatusTrueDF$long <- as.numeric(gsub( ".+? ", "", AQstatusTrueDF$shape2))
+AQstatusTrueDF$councilsiteid <- trim(AQstatusTrueDF$councilsiteid)
+AQstatusTrueDF$councilsiteid <- gsub("Washdyke", "Washdyke Flat Road", AQstatusTrueDF$councilsiteid)
+
+AQStatusTrueSite <- unique(AQstatusTrueDF$councilsiteid)
+
+#If don't filter by AQ site labels? (only by measurements)
+AQstatusTrueDF <- NationalreferenceListDF
+AQstatusTrueDF$lat <- as.numeric(gsub( " .*$", "", AQstatusTrueDF$shape2))
+AQstatusTrueDF$long <- as.numeric(gsub( ".+? ", "", AQstatusTrueDF$shape2))
+AQstatusTrueDF$councilsiteid <- trim(AQstatusTrueDF$councilsiteid)
+AQstatusTrueDF$councilsiteid <- gsub("Washdyke", "Washdyke Flat Road", AQstatusTrueDF$councilsiteid)
+
+# [[ Site and Measurments ]] -----------
+
+## 1. Hilltop servers-----------------------------------------------------------
+# Site List
+
+serviceType = 'WFS'
+serviceTypeHill = 'Hilltop'
+
+HilltopSiteListDF <- data.frame()
+for (n in allHilltopCouncilList)
+{print (n)
+  httpPath = hilltopcouncilCSV[(which(hilltopcouncilCSV$Council == n)),2]
+  councilPath = hilltopcouncilCSV[(which(hilltopcouncilCSV$Council == n)),3]
+  dataType = hilltopcouncilCSV[(which(hilltopcouncilCSV$Council == n)),6]
+  
+  ###site list
+  buildURL <- buildSiteURL(httpPath, councilPath, dataType, 'SiteList', serviceType)
+  buildURL
+  print(buildURL)
+  fileURL <- url(buildURL)
+  
+  tryCatch(
+    ##try to read XML
+    {r <- read_xml(fileURL);
+    ##on success continue with loop
+    message('Getting Site List')
+    siteDF <- xmlToDataFrame(getNodeSet(xmlParse(r), "//SiteList"))
+    siteDF["Council"] <- n
+    siteDF["httpPath"] <- httpPath
+    siteDF["Councilpath"] <- councilPath
+    siteDF["Datatype"] <- dataType
+    
+    setnames(siteDF, tolower(names(siteDF[1:ncol(siteDF)])))
+    HilltopSiteListDF <-  rbind.fill(HilltopSiteListDF, siteDF)
+    } ##this squiggly bracket closes the success part of the try catch
+    ##when error occurs
+    , error = function(e)
+    {print('URL failed')}
+    ##end try catch
+    , silent = TRUE)
+  rm(siteDF)
+}
+
+HilltopSiteListDF$uniquename <- make.unique(HilltopSiteListDF$site)
+
+
+HilltopAirSiteListDF <- HilltopSiteListDF %>% 
+  # Subset to AQ site
+  # filter(site %in% AQstatusTrueDF$councilsiteid | site %in% AQstatusTrueDF$siteid) %>%
+  # Add airshed and site type
+  mutate(airshed = AQstatusTrueDF$airtown[match(site, AQstatusTrueDF$councilsiteid)],
+         sitetype = AQstatusTrueDF$airqsitetype[match(site, AQstatusTrueDF$councilsiteid)]) %>%
+  # Fix Nelson City Council in council column
+  mutate(council = ifelse(str_detect(.$site, "AQ Nelson"), "Nelson", council))
+
+# Location information tidy up (Location(Lat+Long), Lat and Long)
+unique(HilltopAirSiteListDF$location) #Check 
+unique(HilltopAirSiteListDF$council[which(is.na(HilltopAirSiteListDF$location))]) #Find missing
+
+#Fix missing locations (as much as possible) and create lat, long for others
+HilltopAirSiteListDF <- HilltopAirSiteListDF %>%
+  mutate(location = ifelse(is.na(location), AQstatusTrueDF$shape[match(site, AQstatusTrueDF$councilsiteid)], location)) %>%
+  mutate(lat = ifelse(!(is.na(location)),
+                      gsub(" .*$", "", HilltopAirSiteListDF$location),
+                      NA),
+         long = ifelse(!(is.na(location)),
+                       gsub(".+? ", "", location),
+                       NA)) %>% 
+  mutate(lat = as.numeric(lat), 
+         long = as.numeric(long),
+         location = paste(lat, long, sep = ' ')) %>%
+  distinct(site, .keep_all = TRUE)
+
+
+# Hilltop AQ List
+HilltopAQSiteList <- HilltopAirSiteListDF %>%
+  distinct(site, .keep_all = TRUE) %>%
+  pull(site)
+
+# Measurement List
+HilltopAQmeasListDF <- data.frame()
+for (i in HilltopAQSiteList)
+{
+  httpPath = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),4]
+  council = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),3]
+  councilPath = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),5]
+  dataType = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),6]
+  location = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),2]
+  airshed = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),8]
+  sitetype = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),9]
+  lat = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),10]
+  long = HilltopAirSiteListDF[(which(HilltopAirSiteListDF$site == i)),11]
+  
+  cleanSiteName = gsub(' ','%20', i)
+  print(cleanSiteName)
+  buildURL <- buildMeasurementBySiteURL(httpPath,councilPath,dataType,'MeasurementList',serviceTypeHill,cleanSiteName)
+  print(buildURL)
+  fileURL <- url(buildURL)
+  
+  tryCatch(
+    ##try to read XML
+    {r <- read_xml(fileURL)
+    ##on success continue with loop
+    message('URL live')
+    ###check if dataframe has any data and if yes, then add to exisitng data
+    resultList = c(str_detect((xmlToList(xmlParse(r))), '/Error'))
+    condTest = any(resultList == TRUE)
+    
+    if(isTRUE(condTest)){
+      message('No measurements found - skipping')
+    }
+    else {
+      message('Getting Measurement List')
+      
+      measurementBySiteDF <- xmlToDataFrame(getNodeSet(xmlParse(r), "//Measurement"))
+      
+      ###check if dataframe has any data and if yes, then add to exisitng data
+      measurementBySiteDF["httppath"] <- httpPath
+      measurementBySiteDF["Councilpath"] <- councilPath
+      measurementBySiteDF["Council"] <- council
+      measurementBySiteDF["Datatype"] <- dataType
+      measurementBySiteDF["site"] <- gsub('%20', ' ', cleanSiteName)
+      measurementBySiteDF["location"] <- location
+      measurementBySiteDF["lat"] <- lat
+      measurementBySiteDF["long"] <- long
+      measurementBySiteDF["airshed"] <- airshed
+      measurementBySiteDF["sitetype"] <- sitetype
+      
+      
+      setnames(measurementBySiteDF, tolower(names(measurementBySiteDF[1:ncol(measurementBySiteDF)])))
+      HilltopAQmeasListDF <-  rbind.fill(HilltopAQmeasListDF, measurementBySiteDF)
+    }} ##this squiggly bracket closes the success part of the try catch
+    
+    ##when error occurs
+    , error = function(e)
+    {print('URL FAILED')}
+    
+    ##end try catch
+    , silent = TRUE)
+  
+  ###clean up
+  rm(measurementBySiteDF)
+}
+
+HilltopAllSiteListDF <- HilltopAirSiteListDF
+HilltopMeasListDF <- HilltopAQmeasListDF
+
+# unique(HilltopAQmeasListDF$requestas)
+# 
+s3save(HilltopAllSiteListDF, object = "HilltopAllSiteListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+# s3save(HilltopAirSiteListDF, object = "HilltopAirSiteListDFF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3save(HilltopMeasListDF, object = "HilltopMeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+
+
+## 2. Kisters servers-----------------------------------------------------------
+# Site and Measurement List
+
+con <- "http://aklc.hydrotel.co.nz:8080/KiWIS/KiWIS?service=kisters&type=queryServices&request=getTimeseriesList&datasource=1&format=html&station_no=*&returnfields=station_name,station_no,station_id,ts_id,ts_name,parametertype_name,ts_shortname,station_latitude,station_longitude"
+t <- readLines(con)
+AKLSitelist <- htmltab(t, which = 1, header = 1) 
+AKLSitelist <- AKLSitelist %>%
+  mutate(councilpath= "http://aklc.hydrotel.co.nz:8080/KiWIS/KiWIS?",
+         source = "1",
+         council = "Auckland",
+         site = station_name,
+         siteid = station_no)
+
+con <- "http://envdata.waikatoregion.govt.nz:8080/KiWIS/KiWIS?service=kisters&type=queryServices&request=getTimeseriesList&datasource=0&format=html&station_no=*&returnfields=station_name,site_no,station_no,station_id,ts_id,ts_name,parametertype_name,ts_shortname,station_latitude,station_longitude,stationparameter_no"
+t <- readLines(con)
+WaikatoSitelist <- htmltab(t, which = 1, header = 1)
+WaikatoSitelist <- WaikatoSitelist %>%
+  mutate(councilpath= "http://envdata.waikatoregion.govt.nz:8080/KiWIS/KiWIS?",
+         source = "0",
+         council = "Waikato",
+         site = station_name,
+         siteid = station_id) #siteid to match AQtrue list
+
+KistersSiteList <- rbind.fill(AKLSitelist, WaikatoSitelist)
+
+rm(con)
+rm(t)
+
+#Location information tidy up (Location(Lat+Long), Lat and Long)
+KistersSiteList <- KistersSiteList %>%
+  mutate(
+    location = paste(station_latitude,station_longitude, sep = " "),
+    lat = gsub( " .*$", "", location),
+    long = gsub( ".+? ", "", location)) %>%
+  mutate(
+    parameter = ifelse(
+      council == "Auckland",
+      sub( ".*\\/", "", ts_shortname),
+      ts_shortname)) %>%
+  mutate(lat = as.numeric(lat), 
+         long = as.numeric(long))
+
+#Subset AQ site
+KistersAQSiteList <- KistersSiteList %>%
+  # filter(siteid %in% AQstatusTrueDF$councilsiteid) %>%
+  distinct(siteid, .keep_all = TRUE) %>% 
+  mutate(requestas = parametertype_name,
+         site = gsub( "AC ", "", site))
+
+# Add site type and airshed (air town)
+KistersAQSiteList <- KistersAQSiteList %>%
+  mutate(airshed = AQstatusTrueDF$airtown[match(siteid, AQstatusTrueDF$councilsiteid)],
+         sitetype = AQstatusTrueDF$airqsitetype[match(siteid, AQstatusTrueDF$councilsiteid)])
+
+#AQ site measurement list
+KistersAQmeasListDF <- KistersSiteList %>%
+  mutate(requestas = case_when(council == "Auckland" ~ parametertype_name,
+                               council == "Waikato" ~ stationparameter_no),
+         site = gsub( "AC ", "", site),
+         airshed = AQstatusTrueDF$airtown[match(siteid, AQstatusTrueDF$councilsiteid)],
+         sitetype = AQstatusTrueDF$airqsitetype[match(siteid, AQstatusTrueDF$councilsiteid)]) #%>%
+  # filter(siteid %in% AQstatusTrueDF$councilsiteid) 
+# filter(ts_id != "137986042", ts_id != "138002042")
+
+KistersAllSiteList <- KistersSiteList
+KistersMeasListDF <- KistersAQmeasListDF
+
+s3save(KistersAllSiteList, object = "KistersAllSiteList.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3save(KistersMeasListDF, object = "KistersMeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+
+
+# ## 3. BoP servers-----------------------------------------------------------
+# # Site and Measurement List
+# BoPURL <- "http://ec2-52-6-196-14.compute-1.amazonaws.com/sos-bop/service?service=SOS&version=2.0.0&request=GetCapabilities"
+# print(BoPURL)
+# 
+# fileURL <- url(BoPURL)
+# r <- read_xml(fileURL)
+# BoPprocedurelist <- xmlToDataFrame(getNodeSet(xmlParse(r), "//swes:procedure"))
+# 
+# #Site list tidy up
+# BoPSiteListDF <- BoPprocedurelist %>%
+#   mutate(site = gsub(".*@","",text)) %>%
+#   mutate(site = gsub("_.*","",site))%>%
+#   mutate(council = "Bay of Plenty",
+#          councilpath = "http://ec2-52-6-196-14.compute-1.amazonaws.com/sos-bop/service?",
+#          requestas = gsub("\\@.*","",text),
+#          location = NationalreferenceListDF$shape[match(site, NationalreferenceListDF$councilsiteid)])
+# 
+# #BoP has AQsite but these were not identified in AQstatusTrueDF 
+# BoPsites <- c(
+#   'DP650467',
+#   'EK171423',
+#   'KM165415',
+#   "EP116688",
+#   "EP079602",
+#   "EP106779",
+#   "EP045607",
+#   "EP102897",
+#   "EP262582",
+#   "DP955711"
+# )
+# 
+# #Location information tidy up (Location(Lat+Long), Lat and Long)
+# BoPSiteListDF <- BoPSiteListDF %>%
+#   mutate(
+#     requestas = gsub("\\.","_",requestas),
+#     lat = gsub( " .*$", "", location),
+#     long = gsub( ".+? ", "", location)) %>%
+#   mutate(lat = as.numeric(lat), 
+#          long = as.numeric(long))
+# 
+# #Subset AQ site
+# BoPAQsitelistDF <- BoPSiteListDF %>% 
+#   filter(site %in% BoPsites) %>%
+#   distinct(site, .keep_all = TRUE)
+# 
+# #AQ site measurement list
+# BoPAQmeasListDF <- BoPSiteListDF %>%
+#   filter(site %in% BoPsites) 
+# 
+# 
+# s3save(BoPSiteListDF, object = "BoPSiteListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+# s3save(BoPAQmeasListDF, object = "BoPAQmeasListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+
+
+# Create National Site List -----------------------------------------------------------
+# NationalSiteListDF <- rbind.fill(HilltopSiteListDF, KistersSiteList, BoPSiteListDF)
+# 
+# save(NationalSiteListDF, file = "Intermediate_Data/NationalSiteListDF.RData")
+# load('NationalSiteListDF.RData')
+
+
+# # Create National Measurement List -----------------------------------------------------------
+# 
+# NationalAQMeasurementListDF <- rbind.fill(HilltopAQmeasListDF, KistersAQmeasListDF, BoPAQmeasListDF)
+# 
+# #Tidy up
+# 
+# NationalAQMeasurementListDF <- NationalAQMeasurementListDF %>%
+#   mutate(combo = paste(site, requestas),
+#          councilparam = paste(council, requestas, sep = '')) %>%
+#   select(site, airshed, sitetype, requestas, units, combo, councilparam, council, councilpath, httppath, requestas, parameter, datatype, location, lat, long) %>%
+#   arrange(council,  site)
+# 
+# NationalAQMeasurementListDFmap <- NationalAQMeasurementListDF %>%
+#   distinct(councilparam, .keep_all = T)
+# 
+# 
+# # Save the Rdata file ###
+# s3save(NationalAQMeasurementListDF, object = "NationalAQMeasurementListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+# load('NationalAQMeasurementListDF.RData')
+#---###
+
+
+# [[ Extraction ]] -----------
+
+# Ignore the folowing when getting time series data-------------------------------------------
+ignoreDF <- c('')
+ignoreDF <- data.frame(ignoreDF)
+
+
+# Define Parameter----------------------------------------------------------------
+
+#Parameter for PM10 Daily
+HilltopmeasurementList = c('PM10_DayMean_Primary',
+                           'PM10 - Daily Average',
+                           'PM10 Daily Avg',
+                           'PM10 24 hour average', #Hawke's Bay
+                           'PM10 24hour Average',
+                           'LAWADailyPM10',
+                           'PM10 ug/m3 24hr mean',
+                           "PM10 24hr mean", #Northland
+                           'PM 10 Daily',
+                           'Daily PM10 NES',
+                           'PM10 (24hr) Adjusted',
+                           # 'PM10 T640', # Southland
+                           'PM2.5 T640', # Southland # 10 min-interval
+                           'PM10 (Daily Average)',
+                           'PM10-DailyAverage',
+                           
+                           #AQ Nelson at Blackwood St 
+                           #(this data includes the Archived data as well as current Telemetry data)
+                           #AQ Nelson at St Vincent St 
+                           #(This data combines early Partisol Data (2001-2006) with data from a FH62BAM (2006-2017) and a 5028iBAM (2018-present)
+                           'PM10 (24 Hour) [PM10 (30min) NCC FH62 BAM]', 
+                           
+                           'PM2.5 - Daily Average',
+                           'PM2.5 24 hour average', # Hawke's Bay
+                           'PM2.5 24hr mean', #Northland
+                           "LAWADailyPM2.5", # Blenheim PM2.5
+                           "PM2.5 (Daily Average)", # Wellington PM2.5
+                           # AQ Nelson at St Vincent St 
+                           #(This data combines early Partisol Data (2008-2017) with data from a 5028iBAM (2018-present))
+                           'PM2.5 (24hr) [PM2.5 (24hr) NCC 5028i BAM]', 
+                           #AQ Nelson at Blackwood St
+                           #(This data comes from lab analysis so is usually about a month behind current date)
+                           'PM2.5 (24hr) [PM2.5 (24hr) NCC Partisol]',
+                           "Sulphur Dioxide - Hourly Average", #Ecan
+                           "Sulphur Dioxide", #NRC & Hawkes Bay
+                           "Nitrogen Dioxide - Hourly Average", # Ecan
+                           "Nitrogen Dioxide 1hr Average (ug/m3)", # Welly
+                           "Nitrogen Dioxide (NO2) ug/m3", #Nelson
+                           "Nitrogen Dioxide", #Hawkes bay
+                           "Ozone - Hourly Average", # Ecan
+                           "Ozone 1hr Average (ug/m3)", #Welly
+                           "Carbon Monoxide - Hourly Average", # Ecan
+                           "Carbon Monoxide 8 Hr Moving Average (mg/m3)" # Wellington
+                           # "Sulphur Dioxide - Daily Average", #Ecan
+                           # "Nitrogen Dioxide - Daily Average", # Ecan
+                           # "Nitrogen Dioxide 24 hr Average (ug/m3)", # Welly
+                           # "Ozone - Daily Average" # Ecan
+)
+
+
+
+kistersmeasurementList = c('PM2.5.AA24H', 'PM10.AA24H', 'Day.Mean',
+                           "OZONE_MCG.AA1H",
+                           "NO2_MCG.AA1H",
+                           "SO2_MCG.AA1H",
+                           "CO_MG.AA1H")
+# "OZONE_MCG.AA24H",
+# "NO2_MCG_RAW.AA24H",
+# "SO2_MCG_RAW.AA24H")
+# kistersmeasurementList = c('PM2.5.AA24H', 'PM10.AA24H', 'Day.Mean') # QA'd data from Auckland
+BoPmeasurementList = c('PM10_DayMean_Primary', 'PM fine_Primary') # Check PM2.5
+
+
+# write.csv(NationalAQMeasurementListDF, file = "AQparameters.csv")
+
+#Set: Time ####-----------------------------------------------------------------------
+# Set the time period for standard period (used in tidy up)
+# standard_timeperiod <- paste("P7D","/", as.Date("2020-12-08"), sep = '')
+# Time to be set for each server to adjust to the time difference
+
+#If update from s3 & from the master file from 1998-2019
+# s3load("NationalAQMeasNumDF_PM10_25_1998-01-01_2019-12-31_1407_.rdata", bucket = "data-pipeline-projects/AirQuality/Output") #load the old file
+
+# #If update from s3
+# previous <- Sys.Date()-7*2-3
+# previousfile <- paste("NationalAQMeasNumDF_PM10_25_NO2_SO2_Ozone_1997-01-01_",previous, ".rdata", sep = '')
+# s3load(previousfile, bucket = "data-pipeline-projects/AirQuality/Output") #load the old file
+
+# NationalAQMeasNumDF_update <- NationalAQMeasNumDF_update%>%
+#   mutate(time = paste(date, "12:00:00", sep = " ")) %>%
+#   mutate(time = as.POSIXct(strptime(time, format='%Y-%m-%d %H:%M:%S')), time)
+
+
+#If update from local drive
+# oldfile = load("Output/data_extracted/NationalAQMeasNumDF_PM10_25_1998-01-01_2020-01-12_.RData") #load the old file
+# oldfile = get(oldfile)
+
+#1. Hilltop data return ####----------------------------------------------------------
+
+# Set the time period to system data (today's date)
+timeperiod <- paste("P16Y","/", as.Date("2020-01-01"), sep = '')
+# timeperiod <- paste("P8D","/", as.Date("2020-07-01"), sep = '')
+
+#Set: measurement
+# measurementDFfiltered <- HilltopAQmeasListDF[HilltopAQmeasListDF$requestas %in% HilltopmeasurementList, ]
+measurementDFfiltered <- HilltopMeasListDF[HilltopMeasListDF$requestas %in% HilltopmeasurementList, ]
+
+#This site doesn't use this parameter (but is used by another site in Nelson)
+measurementDFfiltered <- measurementDFfiltered %>%
+  filter(!(site == "AQ Nelson at St Vincent St" & requestas == "PM2.5 (24hr) [PM2.5 (24hr) NCC Partisol]")) %>%
+  filter(!(council == "Wellington" & requestas == "Nitrogen Dioxide")) %>%
+  filter(!(council == "Ecan" & requestas == "Sulphur Dioxide"))
+ 
+#%>%
+# filter(council == "Nelson") %>%
+# filter(site %in% c("AQ Nelson at Blackwood St", "AQ Nelson at St Vincent St")) %>%
+# # mutate(datatype = "archive") %>%
+# # mutate( = "archive") %>%
+# mutate(requestas = case_when(requestas == 'PM10 (24 Hour) [PM10 (30min) NCC FH62 BAM]' & site == "AQ Nelson at Blackwood St" ~ "PM10 (24hr) averaged from 30 min", 
+#                              requestas == 'PM10 (24 Hour) [PM10 (30min) NCC FH62 BAM]' & site == "AQ Nelson at St Vincent St" ~ "PM10 (24hr) [PM10 (24hr) NCC 5028i BAM]",
+#                              TRUE ~ "remove")) %>%
+# filter(requestas != "remove")
+
+measurementDFfiltered <- measurementDFfiltered %>%
+  filter(!(site %in% AQStatusTrueSite))
+
+
+#Data return
+HilltopAQmeasNumDF <- data.frame()
+for (row in 1:nrow(measurementDFfiltered))
+{
+  httpPath = gsub(' ','%20', measurementDFfiltered$httppath[row])
+  currSite = gsub(' ','%20', measurementDFfiltered$site [row])
+  currMeas = gsub(' ','%20', measurementDFfiltered$requestas [row])
+  councilPath = gsub(' ','%20', measurementDFfiltered$councilpath [row])
+  dataType = gsub(' ','%20', measurementDFfiltered$datatype [row])
+  
+  if(measurementDFfiltered$council [row] == "Ecan"){
+    buildURL <- buildEcanDataURL(httpPath, councilPath, dataType, currSite ,currMeas, timeperiod)
+  } else {
+    buildURL <- buildDataURL(httpPath, councilPath, dataType, currSite ,currMeas, timeperiod)
+  }
+  
+  measurementDFfiltered$url[row] <- buildURL
+  print(buildURL)
+  fileURL <- url(buildURL)
+  
+  tryCatch({r <- read_xml(fileURL);
+  message('URL live')
+  resultList = c(str_detect((xmlToList(xmlParse(r))), '/ExceptionText'))
+  condTest = any(resultList == TRUE)
+  if(isTRUE(condTest)){
+    message('No data found - skipping - ', gsub('%20', ' ', currSite), " - ", gsub('%20', ' ', currMeas))
+  }
+  else {
+    message('Getting time series data...', gsub('%20', ' ', currSite), " - ", gsub('%20', ' ', currMeas))
+    df <- xmlToDataFrame(getNodeSet(xmlParse(r), "//wml2:MeasurementTVP"))
+    df["site"] <- gsub('%20', ' ', currSite)
+    df["council"] <- measurementDFfiltered$council [row]
+    df["councilpath"] <- councilPath
+    df["indicator Name"] <- dataType
+    df["parameter"] <- gsub('%20', ' ', currMeas)
+    df["timeperiod"] <- timeperiod
+    df["newdate"] <- anytime(df$time)
+    df$lat <- gsub(' ',' ', measurementDFfiltered$lat [row])
+    df$long <- gsub(' ',' ', measurementDFfiltered$long [row])
+    df$location <- measurementDFfiltered$location[row]
+    df$airshed <- measurementDFfiltered$airshed [row]
+    df$sitetype <- measurementDFfiltered$sitetype [row]
+    df$server <- "Hilltop"
+    
+    setnames(df, tolower(names(df[1:ncol(df)])))
+    HilltopAQmeasNumDF <- rbind.fill(HilltopAQmeasNumDF, df)
+  }
+  }
+  , error = function(e)
+  {print('URL failed')}
+  , silent = TRUE)
+}
+
+unique(HilltopAQmeasNumDF$parameter) #Check the parameter to ensure the following tidy-up is appropriate
+
+load("Intermediate_Data/HilltopAQmeasNumDF_CO_raw_extraction.RData")
+
+
+
+HilltopAQmeasNumDF_t <- HilltopAQmeasNumDF %>%
+  mutate(paracode = ifelse(str_detect(parameter, "PM2.5"), "PM2.5 - Daily average", "PM10 - Daily average")) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Nitrogen"), "NO2 - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Sulphur"), "SO2 - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Ozone"), "Ozone - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "PM2.5 T640", "PM2.5 - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "Carbon Monoxide 8 Hr Moving Average (mg/m3)", "Carbon Monoxide - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "Carbon Monoxide - Hourly Average", "Carbon Monoxide - Hourly average", paracode)) %>%
+  mutate(aggregation = ifelse(str_detect(paracode, "Daily"), "Daily", "Hourly")) %>%
+  mutate(aggregation = ifelse(str_detect(paracode, "Hourly"), "Hourly", aggregation)) %>%
+  mutate(aggregation = ifelse(str_detect(paracode, "10 min"), "10 min", aggregation)) %>%
+  mutate(value = as.numeric(as.character(value)))
+
+unique(HilltopAQmeasNumDF_t$paracode)
+
+
+##Check duplicated data
+HilltopAQmeasNumDF_t <- HilltopAQmeasNumDF_t %>% 
+  dplyr::filter(!is.na(value)) %>%
+  mutate(unique_ID = paste(site, time, paracode, sep = "_")) #Create unique index
+
+HilltopAQmeasNumDF_t_duplicated <- HilltopAQmeasNumDF_t[which(duplicated(HilltopAQmeasNumDF_t$unique_ID)), ] #Create duplicated DF for check
+unique(HilltopAQmeasNumDF_t_duplicated$site) #Check the site and nature of duplicates to refine next step
+
+
+#Fix Northland site name
+unique(HilltopAQmeasNumDF_t$site)
+HilltopAQmeasNumDF_t <- HilltopAQmeasNumDF_t %>%
+  mutate(site = ifelse(site %in% c("104977", "300403"), 
+                       AQstatusTrueDF$siteid[match(site, AQstatusTrueDF$councilsiteid)],
+                       site))
+
+# Fix "Invercargill at Pomona Street" and "Gore at Main Street" PM2.5 10 min interval & tidy up
+
+southland_data_fix <- HilltopAQmeasNumDF_t %>%
+  tidy_AQMeasNumDF(., standard_timeperiod) %>%
+  filter(council == "Southland") %>%
+  mutate(time = "12:00:00") %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  select(-time) %>%
+  dplyr::rename(time = datetime) %>%
+  group_by(council, airshed, site, aggparameter, parameter, uom, date, time, year, sitetype, lat, long, server) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Daily average"))
+
+Wellington_data_fix <- HilltopAQmeasNumDF_t %>%
+  filter(council == "Wellington") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  filter(date >= as.Date("2005-01-01")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, datetime, aggparameter, value, lat, long) %>%
+  group_by(council, site, airshed, sitetype, date, datetime, aggparameter, lat, long) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(time = substr(datetime, 12,19)) %>%
+  mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Hourly average")) %>%
+  dplyr::select(council, site, date, time, aggparameter, value, airshed, sitetype, lat, long)
+
+
+Ecan_co_data_fix <- HilltopAQmeasNumDF_t %>%
+  filter(council == "Ecan") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date >= as.Date("2005-01-01")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long) %>%
+  mutate(runningMean = rollmean(value, k = 8, fill = NA, align = 'right')) %>%
+  dplyr::select(-value) %>%
+  dplyr::rename(value = runningMean) %>%
+  dplyr::select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long)
+
+
+
+
+
+HilltopAQmeasNumDF <- HilltopAQmeasNumDF %>%
+  tidy_AQMeasNumDF(., standard_timeperiod) %>%
+  filter(council != "Southland") %>%
+  bind_rows(southland_data_fix)
+
+##Check duplicated data
+HilltopAQmeasNumDF <- HilltopAQmeasNumDF %>% 
+  dplyr::filter(!is.na(value)) %>%
+  mutate(unique_ID = paste(site, time, aggparameter, sep = "_")) #Create unique index
+
+HilltopAQmeasNumDF_duplicated <- HilltopAQmeasNumDF[which(duplicated(HilltopAQmeasNumDF$unique_ID)), ] #Create duplicated DF for check
+unique(HilltopAQmeasNumDF_duplicated$site) #Check the site and nature of duplicates to refine next step
+
+# Save in RData format
+# filename <- paste("HilltopAQmeasNumDF_", timeperiod, ".RData", sep = "")
+# save(HilltopAQmeasNumDF, file = filename)
+
+#2. Kisters data return ----------------------------------------------------------------------
+
+#Set: measurement
+timeperiod <- paste("P5Y","/", Sys.Date()-1, sep = '')
+
+
+# kistersmeasurementList = c("CO_PPM.AA1H",
+#                            "CO_MG.AA1H",
+#                            "CO_PPM_RAW.AA1H",
+#                            "CO_MG_RAW.AA1H")
+
+# KistersMeasList <- KistersAQmeasListDF %>%
+KistersMeasList <- KistersMeasListDF %>%
+  filter(parameter %in% kistersmeasurementList) %>%
+  filter(
+    parametertype_name %in% c(
+      # Auckland
+      "PM10",
+      "PM2.5",
+      # "Fine Particulate Material",
+      # "Fine Particulate Material 2.5",
+      "NO2_MCG",
+      "SO2_MCG",
+      "OZONE_MCG",
+      "CO_MG"
+    ) | requestas %in% c(
+      #Waikato
+      "PM10",
+      "PM2.5",
+      "PM10-Secondary",
+      "PM10-Old"
+    )
+  ) %>%
+  # Billah St has experienced three changes and now the correct data all merged into PM10-Secondary
+  filter(!(station_name == "SWDC Billah St Water Reservoir" & requestas %in% c("PM10-Old", "PM10"))) %>%
+  # Note that Waitomo has the same issue. But data are stroed in two data stream: PM10-Secondary from 15/11/2019 and PM10 before 15/11/2019. They are looking to merge them too.
+  # This line needs to be adjusted depending on the period of extraction
+  filter(!(station_name == "Waitomo District Council Yard - Queen St" & requestas %in% c("PM10"))) %>%
+  mutate(period = gsub(".*\\-","",ts_name),
+         ts_shortname = ifelse(council == "Auckland", str_extract(ts_shortname, "AA[1:24]+H$"), ts_shortname))
+
+KistersMeasList <- KistersMeasList %>%
+  filter(!(siteid %in% AQStatusTrueSite))
+
+#Data return
+KistersAQmeasNumDF <- data.frame()
+for (row in 1:nrow(KistersMeasList))
+{
+  kisterpath = gsub(' ','%20', KistersMeasList$councilpath [row])
+  source = gsub(' ','%20', KistersMeasList$source [row]) # Auckland only
+  currSite = KistersMeasList$station_name [row]
+  site_id = gsub(' ','%20', KistersMeasList$siteid [row]) # Auckland only
+  station_no = gsub(' ','%20', KistersMeasList$station_no [row]) # Waikato only
+  site_no = gsub(' ','%20', KistersMeasList$site_no [row]) # Waikato only
+  requestas = KistersMeasList$requestas [row]
+  ts_shortname = gsub(' ','%20', KistersMeasList$ts_shortname [row])
+  timeperiod = timeperiod
+  
+  if(KistersMeasList$council [row] == "Auckland"){
+    buildURL <- buildKistersWQSiteURL (kisterpath, source, station_no, ts_shortname, requestas, timeperiod)
+    
+    print(buildURL)
+    fileURL <- url(buildURL)
+    k <- readLines(fileURL)
+    KistersMeasList$url[row] <- buildURL
+    
+    tryCatch(
+      {r <- read_xml(fileURL);
+      message('URL built')
+      resultList = c(str_detect((xmlToList(xmlParse(r))), "//ExceptionText"))
+      condTest = any(resultList == TRUE)
+      if(isTRUE(condTest)){
+        message('No data found - skipping - ', gsub('%20', ' ', currSite), " - ", requestas)
+      }
+      else {
+        message('Getting time series data...', gsub('%20', ' ', currSite), " - ", requestas)
+        df <- xmlToDataFrame(getNodeSet(xmlParse(r), "//wml2:MeasurementTVP"))
+        df["station_id"] <- gsub(' ','%20', KistersMeasList$station_id [row])
+        df["parameter"] <- requestas 
+        df["ts_shortname"] <- gsub(' ','%20', KistersMeasList$ts_shortname [row])
+        df["ts_id"] <- KistersMeasList$ts_id [row]
+        df["timeperiod"] <- timeperiod
+        df["site"] <- gsub(' ',' ', KistersMeasList$station_name [row])
+        df["newdate"] <- anytime(df$time)
+        df["council"] <- gsub(' ','%20', KistersMeasList$council [row])
+        df["councilpath"] <- gsub(' ','%20', KistersMeasList$councilpath [row])
+        df$value <- as.numeric(as.character(df$value))
+        df$lat <- KistersMeasList$lat [row]
+        df$long <- KistersMeasList$long [row]
+        df$location <- KistersMeasList$location[row]
+        df$airshed <- KistersMeasList$airshed [row]
+        df$sitetype <- KistersMeasList$sitetype [row]
+        df$server <- "Kisters"
+        
+        KistersAQmeasNumDF <- rbind.fill(KistersAQmeasNumDF, df)
+      }
+      }
+      , error = function(e)
+      {print('URL failed')}
+      
+      , silent = TRUE)
+    
+  } else if(KistersMeasList$council [row] == "Waikato") {
+    buildURL <- buildWaikatoAQDataURL(kisterpath, site_no, station_no, requestas, ts_shortname, timeperiod)
+    # 
+    # buildURL <- "http://envdata.waikatoregion.govt.nz:8080/KiWIS/KiWIS?&service=kisters&type=queryServices&request=getTimeseriesValues&datasource=0&format=csv&dateformat=yyyy-MM-dd%20HH:mm:ss&ts_path=1987/1/PM10/Day.Mean&returnfields=Timestamp,Value,Quality%20Code&to=2020-12-08&period=P7D"
+    
+    print(buildURL)
+    noRow <- read.delim(url(buildURL), sep = ';') %>%
+      slice(3:nrow(.)) %>%
+      nrow()
+    
+    if(noRow == 1){
+      
+      message('No data found - skipping - ', gsub('%20', ' ', currSite), " - ", requestas)
+    } else {
+      
+      message('Getting time series data...', gsub('%20', ' ', currSite), " - ", requestas)
+      
+      df <- read.delim(url(buildURL), sep = ';') %>%
+        slice(3:nrow(.)) %>%
+        mutate(time = row.names(.)) %>%
+        mutate(X.ts_id = as.numeric(as.character(X.ts_id))) %>%
+        setNames(c("value", "quality_code", "time")) %>%
+        mutate(site = gsub(' ',' ', KistersMeasList$station_name [row]),
+               station_id = gsub(' ','%20', KistersMeasList$station_id [row]),
+               parameter = requestas,
+               ts_shortname = gsub(' ','%20', KistersMeasList$ts_shortname [row]),
+               ts_id = KistersMeasList$ts_id [row],
+               timeperiod = timeperiod,
+               site = gsub(' ',' ', KistersMeasList$station_name [row]),
+               newdate = time,
+               council = gsub(' ','%20', KistersMeasList$council [row]),
+               councilpath = gsub(' ','%20', KistersMeasList$councilpath [row]),
+               lat = KistersMeasList$lat [row],
+               long = KistersMeasList$long [row],
+               location = KistersMeasList$location[row],
+               airshed = KistersMeasList$airshed [row],
+               sitetype = KistersMeasList$sitetype [row],
+               server = "Kisters")
+      
+      KistersAQmeasNumDF <- rbind.fill(KistersAQmeasNumDF, df)
+    }
+    
+  }
+  
+  rm(df)
+}
+
+
+Auckland_CO <- KistersAQmeasNumDF %>%
+  mutate(aggparameter = "CO - Hourly average") %>%
+  mutate(ts_shortname = str_extract(aggparameter, c("H.+|D.+")),
+         newdate = time) %>%
+  mutate(date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  dplyr::rename(frequency = ts_shortname) %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date >= as.Date("2005-01-01")) %>%
+  select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long) %>%
+  arrange(council, aggparameter, site, date, time) %>%
+  group_by(council, site, airshed, sitetype, aggparameter, lat, long) %>%
+  mutate(runningMean = rollapply(value, width = 8, FUN = mean, fill = NA, align = 'right')) %>%
+  # mutate(runningMean = rollmean(value, k = 8, fill = NA, align = 'right')) %>%
+  dplyr::select(-value) %>%
+  dplyr::rename(value = runningMean) %>%
+  dplyr::select(council, site, date, time, value, airshed, sitetype, aggparameter, lat, long)
+
+
+
+#Check the parameter to ensure the following tidy-up is appropriate
+unique(KistersAQmeasNumDF$parameter) 
+unique(KistersAQmeasNumDF$ts_shortname)
+
+KistersAQmeasNumDF <- KistersAQmeasNumDF %>%
+  mutate(paracode = case_when(parameter %in% c("PM10_RAW","PM10", "PM10-Secondary") ~ "PM10 - Daily average",
+                              parameter %in% c("PM2.5_RAW","PM2.5") ~ "PM2.5 - Daily average",
+                              parameter == "PM10_RAW" ~ "PM10 - Daily average",
+                              parameter == "NO2_MCG_RAW" ~ "NO2 - Hourly average",
+                              parameter == "SO2_MCG_RAW" ~ "SO2 - Hourly average",
+                              parameter == "OZONE_MCG" ~ "Ozone - Hourly average",
+                              parameter == "CO_MG" ~ "CO - Hourly average")) %>%
+  # mutate(parameter = sub('Fine Particulate Material 2.5','PM2.5', parameter)) %>%
+  mutate(ts_shortname = str_extract(paracode, c("H.+|D.+")),
+         newdate = time) %>%
+  mutate(date = substr(newdate, 1, 10)) %>%
+  dplyr::rename(frequency = ts_shortname) %>%
+  # mutate(paracode = paste (parameter, frequency, sep = " - ")) %>%
+  mutate(value = as.numeric(as.character(value)))
+
+unique(KistersAQmeasNumDF$paracode)
+
+## Removed data
+removal_Kister <- KistersAQmeasNumDF %>%
+  dplyr::filter(is.na(value) | value == 0 | value == "") %>%
+  tidy_AQMeasNumDF(., standard_timeperiod)
+
+##Remove NA & 0 & missing value
+# KistersAQmeasNumDF <- KistersAQmeasNumDF %>%
+#   mutate(value = as.numeric(as.character(value))) %>%
+#   dplyr::filter(!is.na(value)) %>%
+#   dplyr::filter(value != 0) %>%
+#   filter(value != "")
+
+##Check duplicated data
+KistersAQmeasNumDF <- KistersAQmeasNumDF %>% 
+  mutate(unique_ID = paste(site, time, paracode, sep = "_")) #Create unique index
+# mutate(unique_ID = paste(site, substr(time,1,10), paracode, sep = "_")) #Create unique index
+
+KistersAQmeasNumDF_duplicated <- KistersAQmeasNumDF[which(duplicated(KistersAQmeasNumDF$unique_ID)), ] #Create duplicated DF for check
+unique(KistersAQmeasNumDF_duplicated$site) #Check the site and nature of duplicates to refine next step
+
+##Deplicate detection
+
+if(sum(unique(KistersAQmeasNumDF_duplicated$site) == c("Waitomo District Council Yard - Queen St", "SWDC Billah St Water Reservoir")) == 2){
+  
+  # Remove duplicated measurement from "SWDC Billah St Water Reservoir"(duplicated from the beginning with the same values but also from 15/11/2019 with different values) and "Waitomo District Council Yard - Queen St"(pure duplication) (Need to confirm with the Council)
+  
+  
+  KistersAQmeasNumDF <- KistersAQmeasNumDF %>% 
+    filter(ts_id != "137986042", ts_id != "138002042") %>%
+    mutate(unique_ID = paste(ts_id, time, parameter, sep = "_"),
+           time_revised = substr(time,1,10)) %>%
+    mutate(time_revised = as.Date(time_revised))
+  
+  KistersAQmeasNumDF_duplicated <- KistersAQmeasNumDF[which(duplicated(KistersAQmeasNumDF$unique_ID)), ] #Create duplicated for adding back (as this picks up the second duplicate, which is the same as the one used in LAWA)
+  
+  KistersAQmeasNumDF_not_duplicated_95159042 <- KistersAQmeasNumDF %>% 
+    filter(ts_id == "95159042") %>%
+    filter(time_revised <= "2019-11-14") #Find the non-duplicated records
+  
+  KistersAQmeasNumDF_not_duplicated_94983042 <- KistersAQmeasNumDF %>% 
+    filter(ts_id == "94983042") %>%
+    filter(time_revised <= "2019-11-14") #Find the non-duplicated records
+  
+  KistersAQmeasNumDF <- KistersAQmeasNumDF %>% 
+    filter(ts_id != "95159042", ts_id != "94983042") #Remove all records from these two sites
+  
+  KistersAQmeasNumDF <- rbind.fill(KistersAQmeasNumDF, KistersAQmeasNumDF_duplicated, KistersAQmeasNumDF_not_duplicated_94983042, KistersAQmeasNumDF_not_duplicated_95159042) #Add the list without those two sites, the right duplicates and the non-duplicated record for two sites together
+  
+} else {
+  
+  KistersAQmeasNumDF <- KistersAQmeasNumDF
+}
+
+KistersAQmeasNumDF <- KistersAQmeasNumDF %>%
+  tidy_AQMeasNumDF(., standard_timeperiod)
+
+
+# Save in RData format
+# filename <- paste("KistersAQmeasNumDF_", timeperiod, ".RData", sep = "")
+# save(KistersAQmeasNumDF, file = filename)
+
+#3. BOP data return ----------------------------------------------------------------------
+# Set the time period to system data (today's date)
+# timeperiod <- paste("P7D","/", Sys.Date(), sep = '')
+timeperiod <- paste("P31D","/", as.Date("2020-09-01"), sep = '')
+bop_timeperiod <- timeperiod # Save for later
+
+#Set: measurement
+BoPMeasList <- BoPAQmeasListDF %>%
+  filter(requestas %in% BoPmeasurementList)
+
+#Data return
+BoPAQmeasNumDF <- data.frame()
+for (row in 1:nrow(BoPMeasList))
+{
+  requestas = gsub(' ','%20', BoPMeasList$requestas[row])
+  site = gsub(' ','%20', BoPMeasList$site [row])
+  timeperiod = timeperiod
+  
+  buildURL <- buildBoPWQSiteURL (requestas, site, timeperiod)
+  print(buildURL)
+  BoPMeasList$url[row] <- buildURL
+  
+  fileURL <- url(buildURL)
+  
+  tryCatch(
+    {r <- read_xml(fileURL);
+    message('URL built')
+    resultList = c(str_detect((xmlToList(xmlParse(r))), "/ExceptionText"))
+    condTest = any(resultList == TRUE)
+    
+    if(isTRUE(condTest)){
+      message('No data found - skipping - ', gsub('%20', ' ', currSite))
+    }
+    else {
+      message('Getting time series data...')
+      
+      df <- xmlToDataFrame(getNodeSet(xmlParse(r), "//wml2:MeasurementTVP"))
+      df$parameter <- gsub(' ','%20',BoPMeasList$requestas [row])
+      df$site <- gsub(' ','%20', BoPMeasList$site [row])
+      df$newdate <- anytime(df$time)
+      df$council <- gsub(' ',' ', BoPMeasList$council [row])
+      df$councilpath <- gsub(' ','%20', BoPMeasList$councilpath [row])
+      df$timeperiod <- timeperiod
+      df$lat <- gsub(' ',' ', BoPMeasList$lat [row])
+      df$long <- gsub(' ',' ', BoPMeasList$long [row])
+      df$location <- BoPMeasList$location [row]
+      df$airshed <- NA
+      df$sitetype <- NA
+      df$server <- "BoP"
+      
+      
+      setnames(df, tolower(names(df[1:ncol(df)])))
+      BoPAQmeasNumDF <- rbind.fill(BoPAQmeasNumDF, data.frame(df))
+      
+    }}
+    , error = function(e)
+    {print('URL failed')}
+    , silent = TRUE)
+  
+  rm(df)
+}
+
+##Tidy up
+#Check the parameter to ensure the following tidy-up is appropriate
+unique(BoPAQmeasNumDF$parameter)
+
+BoPAQmeasNumDF <- BoPAQmeasNumDF %>%
+  mutate(paracode = ifelse(str_detect("PM10_DayMean_Primary", parameter), "PM10 - Daily average", parameter),
+         paracode = ifelse(str_detect("PM%20fine_Primary", parameter), "PM2.5 - 10 min interval", paracode))
+
+unique(BoPAQmeasNumDF$paracode)
+
+#Change the site name
+
+BoPsite_table <-
+  tibble(
+    site_id = c(
+      "EP116688",
+      "EP079602",
+      "EP106779",
+      "EP045607",
+      "EP102897",
+      "EP262582",
+      "DP955711",
+      "DP650467",
+      "EK171423",
+      "KM165415"
+    ),
+    site = c(
+      "Mount Maunganui at Totara St",
+      "Mount Maunganui at Whareroa Marae",
+      "Mount Maunganui at Rail Yard South",
+      "Mount Maunganui at Tauranga Bridge Marina",
+      "Mount Maunganui at Rata St",
+      "Mount Maunganui at De Havilland Way",
+      "Tauranga at Sulphur Point",
+      "Tauranga",
+      "Rotorua",
+      "Whakatane"
+    ),
+    airshed = c(
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Bay of Plenty Region",
+      "Bay of Plenty Region",
+      "Rotorua",
+      "Bay of Plenty Region"
+    ),
+    sitetype = c(
+      "Industrial/Traffic",
+      "Residential/Industrial/Coastal",
+      "Industrial/Coastal",
+      "Industrial/Coastal",
+      "Industrial/Residential/Coastal",
+      "Industrial/Residential/Coastal",
+      "Industrial/Coastal",
+      "NA",
+      "NA",
+      "NA"
+    ),
+    lat = c(
+      "-37.662140",
+      "-37.670021",
+      "-37.654100",
+      "-37.669639",
+      "-37.643420",
+      "-37.669445",
+      "-37.660572",
+      "-37.6835",
+      "-38.1358	",
+      "-37.9608"
+    ),
+    long = c(
+      "176.187393",
+      "176.183578",
+      "176.185900",
+      "176.179716",
+      "176.185079",
+      "176.204361",
+      "176.169118",
+      "176.135",
+      "176.214",
+      "176.981"
+    )
+  )
+
+BoPAQmeasNumDF <- BoPAQmeasNumDF %>%
+  dplyr::rename(site_id = site) %>%
+  select(-sitetype, -airshed, -lat, -long) %>% # Some sites have no location info so add them together
+  left_join(BoPsite_table, by = c("site_id"))
+
+
+## Removed data
+BoPAQmeasNumDF <- BoPAQmeasNumDF %>%
+  mutate(value = as.numeric(as.character(value)))
+
+removal_BoP <- BoPAQmeasNumDF %>%
+  dplyr::filter(is.na(value) | value == 0 | value == "")  %>%
+  tidy_AQMeasNumDF(., bop_timeperiod)
+
+##Remove NA & 0 & missing value
+# BoPAQmeasNumDF <- BoPAQmeasNumDF %>%
+#   mutate(value = as.numeric(as.character(value))) %>%
+#   dplyr::filter(!is.na(value)) %>%
+#   dplyr::filter(value != 0) %>%
+#   filter(value != "")
+
+##Check duplicated data
+BoPAQmeasNumDF <- BoPAQmeasNumDF %>% 
+  mutate(unique_ID = paste(site, substr(time,1,10), paracode, sep = "_")) #Create unique index
+
+BoPAQmeasNumDF_duplicated <- BoPAQmeasNumDF[which(duplicated(BoPAQmeasNumDF$unique_ID)), ] #Create duplicated DF for check
+unique(BoPAQmeasNumDF_duplicated$site) #Check the site and nature of duplicates to refine next step (if any)
+
+
+# Fix "Rotorua" PM2.5 10 min interval and tidy up
+BoPAQmeasNumDF <- BoPAQmeasNumDF %>%
+  tidy_AQMeasNumDF(., bop_timeperiod) %>%
+  group_by(council, airshed, site, aggparameter, parameter, uom, date, year, sitetype, lat, long, server) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Daily average"))
+
+
+# Save in RData format
+# filename <- paste("BoPAQmeasNumDF_", timeperiod, ".RData", sep = "")
+# save(BoPAQmeasNumDF, file = filename)
+
+# Error detection -------------------------------------------------------
+
+if(length(unique(HilltopAQmeasNumDF_duplicated$site)) > 0){
+  print("There are duplicates in Hilltop which need investigation.")
+  print(unique(HilltopAQmeasNumDF_duplicated$site))
+  
+}
+
+if(length(unique(KistersAQmeasNumDF_duplicated$site)) > 0){
+  print("There are duplicates in Kister which need investigation.")
+  print(unique(KistersAQmeasNumDF_duplicated$site))
+  
+}
+
+if(length(unique(BoPAQmeasNumDF_duplicated$site)) > 0){
+  print("There are duplicates in BoP which need investigation.")
+  print(unique(BoPAQmeasNumDF_duplicated$site))  
+  
+}
+
+# Create National AQ measurement Data frame ####---------------------------
+
+HilltopAQmeasNumDF_mod <- HilltopAQmeasNumDF %>%
+  select(-server)
+
+KistersAQmeasNumDF_mod <- KistersAQmeasNumDF %>%
+  select(-server)
+
+BoPAQmeasNumDF_mod <- BoPAQmeasNumDF %>%
+  select(-server)
+
+NationalAQMeasNumDF <- rbind.fill(HilltopAQmeasNumDF, KistersAQmeasNumDF, BoPAQmeasNumDF) %>%
+  select(-server)
+
+#Tidy up ####-----------------------------------------
+
+
+# Save National AQ measurement Data frame ####---------------------------
+#---###
+# Save locally
+# filename <- paste("Output/data_extracted/NationalMeasNumDF_PM10_25_DailyAvg", sub("/","_",timeperiod), ".RData", sep = "")
+# save(NationalAQMeasNumDF, file = filename)
+# 
+# save(NationalAQMeasNumDF, file = "Output/data_extracted/airqualitymasterdataframe50years")
+#
+# Save it on AWS
+# filename <- paste("NationalMeasNumDF_PM10_25_DailyAvg", sub("/","_",timeperiod), ".rdata", sep = "")
+# s3save(NationalAQMeasNumDF, object = filename, bucket = "data-pipeline-projects/AirQuality/Output")
+#
+#---###
+
+#write.csv(NationalAQMeasNumDF , file = "NationalAQMeasNumPM10_25.csv")
+
+
+#Read BoP data from files ------
+# Filename --------------------------------------------------------------------
+
+filename <- list.files("raw_data", pattern="20200928", all.files=TRUE,  ### Change date
+                       full.names=TRUE) %>%
+  as.list()
+
+## Funcion/Reference -----------------------------------------------------------
+
+BoPsite_table <-
+  tibble(
+    site_id = c(
+      "EP116688",
+      "EP079602",
+      "EP106779",
+      "EP045607",
+      "EP102897",
+      "EP262582",
+      "DP955711",
+      "DP650467",
+      "EK171423",
+      "KM165415"
+    ),
+    site = c(
+      "Mount Maunganui at Totara St",
+      "Mount Maunganui at Whareroa Marae",
+      "Mount Maunganui at Rail Yard South",
+      "Mount Maunganui at Tauranga Bridge Marina",
+      "Mount Maunganui at Rata St",
+      "Mount Maunganui at De Havilland Way",
+      "Tauranga at Sulphur Point",
+      "Tauranga",
+      "Rotorua",
+      "Whakatane"
+    ),
+    airshed = c(
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Mount Maunanui",
+      "Bay of Plenty Region",
+      "Bay of Plenty Region",
+      "Rotorua",
+      "Bay of Plenty Region"
+    ),
+    sitetype = c(
+      "Industrial/Traffic",
+      "Residential/Industrial/Coastal",
+      "Industrial/Coastal",
+      "Industrial/Coastal",
+      "Industrial/Residential/Coastal",
+      "Industrial/Residential/Coastal",
+      "Industrial/Coastal",
+      "Residential",
+      "Residential",
+      "Residential"
+    ),
+    lat = c(
+      "-37.662140",
+      "-37.670021",
+      "-37.654100",
+      "-37.669639",
+      "-37.643420",
+      "-37.669445",
+      "-37.660572",
+      "-37.6835",
+      "-38.1358	",
+      "-37.9608"
+    ),
+    long = c(
+      "176.187393",
+      "176.183578",
+      "176.185900",
+      "176.179716",
+      "176.185079",
+      "176.204361",
+      "176.169118",
+      "176.135",
+      "176.214",
+      "176.981"
+    )
+  )
+
+read_bop <- function(filename){
+  
+  siteid <- extract2(rm_between(filename, "-", "-", extract=TRUE), 1)
+  
+  file <- read.csv(file = filename, skip = 4)
+  
+  parameter <- colnames(file)
+  
+  uom <- file %>%
+    slice(1) %>%
+    transpose %>%
+    pull()
+  
+  names(file) <- paste(parameter, uom, sep = "_")
+  
+  data <- file %>%
+    slice(2:nrow(.)) %>%
+    dplyr::rename(time = `X_Timestamp (UTC+12:00)`) %>%
+    pivot_longer(cols = -time,
+                 names_to = "parameter",
+                 values_to = "value") %>%
+    mutate(value = as.numeric(as.character(value))) %>%
+    mutate(
+      uom = sub(".*_", "", parameter),
+      uom = sub("Value ", "", uom),
+      parameter = sub("_.*", "", parameter),
+      date = as.Date(substr(time, 1, 10)),
+      year = year(date),
+      time = sub(".* ", "", time),
+      site_id = siteid,
+      value = as.numeric(value),
+      council = "Bay of Plenty") %>%
+    select(council, site_id, year, date, time, parameter, value, uom)
+  
+  # Daily average for pm
+  pm <- data %>%
+    filter(parameter %in% c("PM10.Primary", "PM.fine.Primary")) %>%
+    mutate(time = "12:00:00") %>%
+    mutate(datetime = paste(date, time, sep = " ")) %>%
+    mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+    mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+    group_by(council, site_id, year, date, datetime, parameter, uom) %>%
+    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+    filter(!is.nan(value)) %>%
+    left_join(BoPsite_table, by = c("site_id" = "site_id"))
+  
+  # Hourly average for so2
+  so2 <- data %>%
+    filter(parameter %in% c("SO2.Primary")) %>%
+    mutate(datetime = paste(date, time, sep = " ")) %>%
+    mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+    mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+    group_by(council, site_id, year, date, datetime, parameter, uom) %>%
+    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+    filter(!is.nan(value)) %>%
+    left_join(BoPsite_table, by = c("site_id" = "site_id"))
+  
+  # Hourly average for others
+  other <- data %>%
+    filter(!(parameter %in% c("PM10.Primary", "PM.fine.Primary", "SO2.Primary"))) %>%
+    mutate(datetime = paste(date, time, sep = " ")) %>%
+    mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+    mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+    group_by(council, site_id, year, date, datetime, parameter, uom) %>%
+    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+    filter(!is.nan(value)) %>%
+    left_join(BoPsite_table, by = c("site_id" = "site_id"))
+  
+  bind_rows(pm, so2, other)
+  
+  
+}
+
+
+# Read data --------------------------------------------------------------------
+
+bop_aqdata_raw <- filename %>%
+  purrr::map_dfr(read_bop)
+
+
+# # Only get certain parameters for a certain period and adjust the format
+#
+bop_data <- bop_aqdata_raw %>%
+  filter(parameter %in% c("PM10.Primary", "PM.fine.Primary", "SO2.Primary")) %>%
+  filter(date >= as.Date("2020-08-01")) %>%
+  filter(date <= as.Date("2020-08-31")) %>%
+  mutate(
+    aggparameter = case_when(
+      parameter == "PM10.Primary" ~ "PM10 - Daily average",
+      parameter == "PM.fine.Primary" ~ "PM2.5 - Daily average",
+      parameter == "SO2.Primary" ~ "SO2 - Hourly average"
+    )
+  ) %>%
+  select(-`site_id`)
+
+# # Update National AQ measurement Data frame ####---------------------------
+# 
+# ## Bind with old data
+# # NationalAQMeasNumDF_update <- rbind.fill(NationalAQMeasNumDF_1998_2019, NationalAQMeasNumDF)
+# 
+# ## Bind with bop data
+# NationalAQMeasNumDF <- rbind.fill(bop_data, NationalAQMeasNumDF)
+# 
+# BoPAQmeasNumDF_mod <- bop_data
+# 
+# removal_BoP <- bop_data %>%
+#   dplyr::filter(is.na(value) | value == 0 | value == "")
+
+# Bind with last dataset
+NationalAQMeasNumDF_update <- rbind.fill(NationalAQMeasNumDF_update, NationalAQMeasNumDF)
+
+##Check duplicated data
+NationalAQMeasNumDF_update <- NationalAQMeasNumDF_update %>% 
+  dplyr::filter(!is.na(value)) %>%
+  mutate(unique_ID = paste(site, time, aggparameter, sep = "_")) #Create unique index
+
+# Need to be fix -------
+NationalAQMeasNumDF_update_duplicated <- NationalAQMeasNumDF_update[which(duplicated(NationalAQMeasNumDF_update$unique_ID)), ]
+unique(NationalAQMeasNumDF_update_duplicated$site)
+
+# # Remove other duplicates from Nelson (quite sure they are useless values) and Dunedin's 0s and unusual values
+# NationalAQMeasNumDF_update <- NationalAQMeasNumDF_update %>%
+#   distinct(site, date, aggparameter, .keep_all = TRUE) %>%
+#   select(-unique_ID)
+
+previousfile <- paste("NationalAQMeasNumDF_PM10_25_NO2_SO2_Ozone_1997-01-01_",previous, ".rdata", sep = '')
+#---###
+#Save locally
+from <- "1997-01-01_" #The first
+period_save <- Sys.Date()-1
+to <- paste(period_save,sep = '') #The update
+filename <- paste("Output/data_extracted/NationalAQMeasNumDF_PM10_25_NO2_SO2_Ozone_", from, to, ".RData", sep = "")
+save(NationalAQMeasNumDF_update, file = filename)
+
+
+#Save it on AWS
+from <- "1997-01-01_" #The first
+period_save <- Sys.Date()-1
+to <- paste(period_save,sep = '') #The update
+filename <- paste("NationalAQMeasNumDF_PM10_25_NO2_SO2_Ozone_", from, to, ".rdata", sep = "")
+s3save(NationalAQMeasNumDF_update, object = filename, bucket = "data-pipeline-projects/AirQuality/Output")
+
+# #---###
+
+# [[Temp]] ----
+
+PM10_raw <- read_rds("E:/Air 2018/Measures/PM10 daily concentrations/Analysis/Data/PM10_all_council_data_2018-07-09.RDS")
+
+KistersAQmeasNumDF_CO_raw_extraction <- KistersAQmeasNumDF
+save(KistersAQmeasNumDF_CO_raw_extraction, file = "Intermediate_Data/KistersAQmeasNumDF_CO_raw_extraction.RData")
+HilltopAQmeasNumDF_CO_raw_extraction <- HilltopAQmeasNumDF
+save(HilltopAQmeasNumDF_CO_raw_extraction, file = "Intermediate_Data/HilltopAQmeasNumDF_CO_raw_extraction.RData")
+
+HilltopmeasurementList = c("Carbon Monoxide - Hourly Average", # Ecan
+                           "Carbon Monoxide 8 Hr Moving Average (mg/m3)"
+)
+
+#If update from s3
+previous <- Sys.Date()-7*3-4
+previousfile <- paste("NationalAQMeasNumDF_PM10_25_NO2_SO2_Ozone_1997-01-01_",previous, ".rdata", sep = '')
+s3load(previousfile, bucket = "data-pipeline-projects/AirQuality/Output")
+
+
+
+NationalAQMeasNumDF_update_ERformat <- NationalAQMeasNumDF_update %>%
+  mutate(time = str_sub(time, 12, 19)) %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long)) %>%
+  dplyr::select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long)
+
+
+NationalAQMeasNumDF_update_ERformat_hourly <- NationalAQMeasNumDF_update_ERformat %>%
+  filter(date >= as.Date("2015-01-01") & date <= as.Date("2019-12-31")) %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long)) %>%
+  filter(!(aggparameter %in% c("PM10 - Daily average", "PM2.5 - Daily average"))) %>%
+  dplyr::select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long)
+
+
+s3load("NationalAQMeasNumDF_PM10_25_NO2_SO2_Ozone_bc_for_project_2015-01-01_2020-06-30.rdata", bucket = "data-pipeline-projects/AirQuality/Output")
+s3load("waikato_aq_data.rdata", bucket = "data-pipeline-projects/AirQualityCovidProject/output")
+
+NationalAQMeasNumDF_project_ERformat_onlypm <- NationalAQMeasNumDF_project %>%
+  mutate(time = "00:00:00") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long)) %>%
+  filter(aggparameter %in% c("PM10 - Daily average", "PM2.5 - Daily average")) %>%
+  dplyr::select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long)
+
+
+
+waikato_after2015_ERformat <- waikato_aq_data %>%
+  mutate(time = "00:00:00") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long)) %>%
+  dplyr::select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long, quality_code)
+
+load("Intermediate_Data/KistersAQmeasNumDF_waikato_before2015_raw_extraction.RData")
+
+waikato_before2015 <- KistersAQmeasNumDF_waikato_before2015_raw_extraction %>%
+  mutate(aggparameter = case_when(parameter %in% c("PM10_RAW","PM10", "PM10-Secondary") ~ "PM10 - Daily average",
+                            parameter %in% c("PM2.5_RAW","PM2.5") ~ "PM2.5 - Daily average",
+                            parameter == "PM10_RAW" ~ "PM10 - Daily average",
+                            parameter == "NO2_MCG_RAW" ~ "NO2 - Hourly average",
+                            parameter == "SO2_MCG_RAW" ~ "SO2 - Hourly average",
+                            parameter == "OZONE_MCG" ~ "Ozone - Hourly average",
+                            parameter == "CO_MG" ~ "CO - Hourly average")) %>%
+  mutate(ts_shortname = str_extract(aggparameter, c("H.+|D.+")),
+         newdate = time) %>%
+  mutate(date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  dplyr::rename(frequency = ts_shortname) %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2015-12-31")) %>%
+  select(council, site, aggparameter, date, time, value, airshed, sitetype, aggparameter, lat, long, quality_code) %>%
+  distinct(council, site, aggparameter, date, time, value, .keep_all = TRUE)
+
+load("Intermediate_Data/HilltopAQmeasNumDF_CO_raw_extraction.RData")
+
+HilltopAQmeasNumDF <- HilltopAQmeasNumDF_CO_raw_extraction
+
+HilltopAQmeasNumDF_t <- HilltopAQmeasNumDF %>%
+  mutate(paracode = ifelse(str_detect(parameter, "PM2.5"), "PM2.5 - Daily average", "PM10 - Daily average")) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Nitrogen"), "NO2 - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Sulphur"), "SO2 - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Ozone"), "Ozone - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "PM2.5 T640", "PM2.5 - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "Carbon Monoxide 8 Hr Moving Average (mg/m3)", "CO - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "Carbon Monoxide - Hourly Average", "CO - Hourly average", paracode)) %>%
+  mutate(aggregation = ifelse(str_detect(paracode, "Daily"), "Daily", "Hourly")) %>%
+  mutate(aggregation = ifelse(str_detect(paracode, "Hourly"), "Hourly", aggregation)) %>%
+  mutate(aggregation = ifelse(str_detect(paracode, "10 min"), "10 min", aggregation)) %>%
+  mutate(value = as.numeric(as.character(value)))
+
+unique(HilltopAQmeasNumDF_t$paracode)
+
+Wellington_data_fix <- HilltopAQmeasNumDF_t %>%
+  filter(council == "Wellington") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  filter(date >= as.Date("2005-01-01")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, datetime, aggparameter, value, lat, long) %>%
+  group_by(council, site, airshed, sitetype, date, datetime, aggparameter, lat, long) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(time = substr(datetime, 12,19)) %>%
+  mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Hourly average")) %>%
+  dplyr::select(council, site, date, time, aggparameter, value, airshed, sitetype, lat, long)
+
+
+Ecan_co_data_fix <- HilltopAQmeasNumDF_t %>%
+  filter(council == "Ecan") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date >= as.Date("2005-01-01")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long) %>%
+  mutate(runningMean = rollmean(value, k = 8, fill = NA, align = 'right')) %>%
+  dplyr::select(-value) %>%
+  dplyr::rename(value = runningMean) %>%
+  dplyr::select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long)
+
+load("Intermediate_Data/KistersAQmeasNumDF_CO_raw_extraction.RData")
+
+Auckland_CO <- KistersAQmeasNumDF_CO_raw_extraction %>%
+  mutate(aggparameter = "CO - Hourly average") %>%
+  mutate(ts_shortname = str_extract(aggparameter, c("H.+|D.+")),
+         newdate = time) %>%
+  mutate(date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  dplyr::rename(frequency = ts_shortname) %>%
+  mutate(date = as.Date(date)) %>%
+  filter(date >= as.Date("2005-01-01")) %>%
+  select(council, site, airshed, sitetype, date, time, aggparameter, value, lat, long) %>%
+  arrange(council, aggparameter, site, date, time) %>%
+  group_by(council, site, airshed, sitetype, aggparameter, lat, long) %>%
+  mutate(runningMean = rollapply(value, width = 8, FUN = mean, fill = NA, align = 'right')) %>%
+  # mutate(runningMean = rollmean(value, k = 8, fill = NA, align = 'right')) %>%
+  dplyr::select(-value) %>%
+  dplyr::rename(value = runningMean) %>%
+  dplyr::select(council, site, date, time, value, airshed, sitetype, aggparameter, lat, long)
+
+
+# Data from inactive sites
+
+# Missing some
+load("Intermediate_Data/HilltopAQmeasNumDF_AQFALSE_v1.RData")
+
+# Should be full
+load("Intermediate_Data/HilltopAQmeasNumDF_AQFALSE_v2.RData")
+
+# part1 
+load("Intermediate_Data/KistersAQmeasNumDF_AQFALSE_v1.RData")
+
+# part2
+load("Intermediate_Data/KistersAQmeasNumDF_AQFALSE_v2.RData")
+
+# Hilltop 
+
+
+unique(HilltopAQmeasNumDF_AQFALSE_v2$parameter)
+
+HilltopAQmeasNumDF_AQFALSE_v2 <- HilltopAQmeasNumDF_AQFALSE_v2 %>%
+  mutate(paracode = ifelse(str_detect(parameter, "PM2.5"), "PM2.5 - Daily average", "PM10 - Daily average")) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Nitrogen"), "NO2 - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Sulphur Dioxide - Hourly Average"), "SO2 - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Sulphur Dioxide"), "SO2 - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(str_detect(parameter, "Ozone"), "Ozone - Hourly average", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "PM2.5 T640", "PM2.5 - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "Carbon Monoxide 8 Hr Moving Average (mg/m3)", "CO - 10 min interval", paracode)) %>%
+  mutate(paracode = ifelse(parameter == "Carbon Monoxide - Hourly Average", "CO - Hourly average", paracode)) %>%
+  filter(!(council == "Wellington" & parameter == "Nitrogen Dioxide")) %>% # Remove repeated parameter
+  filter(!(council == "Ecan" & parameter == "Sulphur Dioxide")) %>% # Remove repeated parameter
+  mutate(value = as.numeric(as.character(value))) %>%
+  filter(value < 1000)
+
+unique(HilltopAQmeasNumDF_AQFALSE_v2$paracode)
+  
+
+##Check duplicated data
+HilltopAQmeasNumDF_AQFALSE_v2 <- HilltopAQmeasNumDF_AQFALSE_v2 %>% 
+  dplyr::filter(!is.na(value)) %>%
+  mutate(unique_ID = paste(site, time, paracode, sep = "_")) #Create unique index
+
+HilltopAQmeasNumDF_AQFALSE_v2_duplicated <- HilltopAQmeasNumDF_AQFALSE_v2[which(duplicated(HilltopAQmeasNumDF_AQFALSE_v2$unique_ID)), ] #Create duplicated DF for check
+unique(HilltopAQmeasNumDF_AQFALSE_v2_duplicated$site) #Check the site and nature of duplicates to refine next step
+
+HilltopAQmeasNumDF_AQFALSE_v2_daily <- HilltopAQmeasNumDF_AQFALSE_v2 %>%
+  filter(paracode %in% c("PM10 - Daily average", "PM2.5 - Daily average")) %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2019-12-31")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, datetime, aggparameter, value, lat, long) %>%
+  # group_by(council, site, airshed, sitetype, date, datetime, aggparameter, lat, long) %>%
+  # summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(time = substr(datetime, 12,19)) %>%
+  # mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Hourly average")) %>%
+  dplyr::select(council, site, date, time, aggparameter, value, airshed, sitetype, lat, long)
+
+
+HilltopAQmeasNumDF_AQFALSE_v2_hourly <- HilltopAQmeasNumDF_AQFALSE_v2 %>%
+  filter(!(paracode %in% c("PM10 - Daily average", "PM2.5 - Daily average"))) %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2019-12-31")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, datetime, aggparameter, value, lat, long) %>%
+  group_by(council, site, airshed, sitetype, date, datetime, aggparameter, lat, long) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(time = substr(datetime, 12,19)) %>%
+  mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Hourly average")) %>%
+  dplyr::select(council, site, date, time, aggparameter, value, airshed, sitetype, lat, long)
+
+
+## Kisters
+
+KistersAQmeasNumDF_AQFALSE <- bind_rows(KistersAQmeasNumDF_AQFALSE_v1, KistersAQmeasNumDF_AQFALSE_v2) %>%
+  mutate(paracode = case_when(parameter %in% c("PM10","PM10", "PM10-Secondary") ~ "PM10 - Daily average",
+                              parameter %in% c("PM2.5","PM2.5") ~ "PM2.5 - Daily average",
+                              parameter == "PM10" ~ "PM10 - Daily average",
+                              parameter == "NO2_MCG" ~ "NO2 - Hourly average",
+                              parameter == "SO2_MCG" ~ "SO2 - Hourly average",
+                              parameter == "OZONE_MCG" ~ "Ozone - Hourly average",
+                              parameter == "CO_MG" ~ "CO - Hourly average")) %>%
+  # mutate(parameter = sub('Fine Particulate Material 2.5','PM2.5', parameter)) %>%
+  mutate(ts_shortname = str_extract(paracode, c("H.+|D.+")),
+         newdate = time) %>%
+  mutate(date = substr(newdate, 1, 10)) %>%
+  dplyr::rename(frequency = ts_shortname) %>%
+  # mutate(paracode = paste (parameter, frequency, sep = " - ")) %>%
+  mutate(value = as.numeric(as.character(value)))
+
+
+##Check duplicated data
+KistersAQmeasNumDF_AQFALSE <- KistersAQmeasNumDF_AQFALSE %>% 
+  dplyr::filter(!is.na(value)) %>%
+  mutate(unique_ID = paste(site, time, paracode, sep = "_")) #Create unique index
+
+KistersAQmeasNumDF_AQFALSE_duplicated <- KistersAQmeasNumDF_AQFALSE[which(duplicated(KistersAQmeasNumDF_AQFALSE$unique_ID)), ] #Create duplicated DF for check
+unique(KistersAQmeasNumDF_AQFALSE_duplicated$site) #Check the site and nature of duplicates to refine next step
+
+
+KistersAQmeasNumDF_AQFALSE_daily <- KistersAQmeasNumDF_AQFALSE %>%
+  filter(paracode %in% c("PM10 - Daily average", "PM2.5 - Daily average")) %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2019-12-31")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, datetime, aggparameter, value, lat, long) %>%
+  # group_by(council, site, airshed, sitetype, date, datetime, aggparameter, lat, long) %>%
+  # summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(time = substr(datetime, 12,19)) %>%
+  # mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Hourly average")) %>%
+  dplyr::select(council, site, date, time, aggparameter, value, airshed, sitetype, lat, long)
+
+
+KistersAQmeasNumDF_AQFALSE_hourly <- KistersAQmeasNumDF_AQFALSE %>%
+  filter(!(paracode %in% c("PM10 - Daily average", "PM2.5 - Daily average"))) %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long),
+         uom = "ug/m3",
+         date = substr(newdate, 1, 10),
+         time = substr(newdate, 12,19)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(datetime = paste(date, time, sep = " ")) %>%
+  mutate(datetime = as.POSIXct(strptime(datetime, format='%Y-%m-%d %H:%M:%S'))) %>%
+  mutate(datetime = floor_date(datetime, unit = "hours")) %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2019-12-31")) %>%
+  dplyr::rename(aggparameter = paracode) %>%
+  select(council, site, airshed, sitetype, date, datetime, aggparameter, value, lat, long) %>%
+  group_by(council, site, airshed, sitetype, date, datetime, aggparameter, lat, long) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(time = substr(datetime, 12,19)) %>%
+  mutate(aggparameter = str_replace(aggparameter, "10 min interval", "Hourly average")) %>%
+  dplyr::select(council, site, date, time, aggparameter, value, airshed, sitetype, lat, long)
+
+
+inactive_site_data <- bind_rows(KistersAQmeasNumDF_AQFALSE_hourly, KistersAQmeasNumDF_AQFALSE_daily, HilltopAQmeasNumDF_AQFALSE_v2_hourly, HilltopAQmeasNumDF_AQFALSE_v2_daily)
+
+
+ER_air_data_initial_delivery <- NationalAQMeasNumDF_update_ERformat %>%
+  filter(date <= as.Date("2019-12-31")) %>%
+  filter(!(date >= as.Date("2015-01-01"))) %>%
+  bind_rows(NationalAQMeasNumDF_project_ERformat_onlypm) %>%
+  bind_rows(NationalAQMeasNumDF_update_ERformat_hourly) %>%
+  mutate(sitetype = ifelse(site %in% c("Tauranga", "Rotorua","Whakatane"), "Residential", sitetype)) %>%
+  filter(!(council == "Waikato")) %>%
+  bind_rows(waikato_before2015) %>%
+  bind_rows(waikato_after2015_ERformat) %>%
+  bind_rows(Auckland_CO) %>%
+  bind_rows(Wellington_data_fix) %>%
+  bind_rows(Ecan_co_data_fix) %>%
+  mutate(validated = case_when(council %in% c("Auckland", "Horizons", "Northland", "Tasman", "Ecan", "Hawkes Bay", "Wellington", "Waikato", "Southland", "Bay of Plenty", "West Coast") ~ "Y",
+                           council %in% c("Nelson") & date < as.Date("2020-05-17")~ "Y",
+                           council %in% c("Nelson") & date >= as.Date("2020-05-17")~ "N",
+                           council %in% c("Marlborough")~"Raw",
+                           council %in% c("Gisborne") & date < as.Date("2019-10-21")~ "N",
+                           council %in% c("Gisborne") & date >= as.Date("2019-10-21")~ "Y",
+                           council %in% c("Otago") & date < as.Date("2020-01-01")~ "Y",
+                           council %in% c("Otago") & date >= as.Date("2020-01-01")~ "N",
+                           TRUE ~ "Check")) %>%
+  mutate(
+    validated = case_when(
+      quality_code %in% c("10", "210") ~ "Y",
+      quality_code %in% c("140", "254") ~ "N",
+      quality_code %in% c("231", "90") ~ "Y",
+      TRUE ~ validated
+    )
+  ) %>% 
+  mutate(causioned = ifelse(quality_code %in% c("231", "90"), "Y", "N"))
+
+
+##Check duplicated data
+ER_air_data_initial_delivery_test <- ER_air_data_initial_delivery %>% 
+  mutate(unique_ID = paste(site, date, time, aggparameter, sep = "_")) #Create unique index
+
+ER_air_data_initial_delivery_test_duplicated <- ER_air_data_initial_delivery_test[which(duplicated(ER_air_data_initial_delivery_test$unique_ID)), ] #Create duplicated DF for check
+unique(ER_air_data_initial_delivery_test_duplicated$site) #Check the site and nature of duplicates to refine next step (if any)
+
+save(ER_air_data_initial_delivery, file = "Output/data_extracted/ER_air_data_initial_delivery_0912.RData")  
+s3save(ER_air_data_initial_delivery, object = "ER_air_data_initial_delivery_0912.rdata", bucket = "data-pipeline-projects/AirQuality/Output")
+
+
+ER_air_data_2019 <- bind_rows(inactive_site_data, ER_air_data_initial_delivery) %>%
+  mutate(validated = case_when(council %in% c("Auckland", "Horizons", "Northland", "Tasman", "Ecan", "Hawkes Bay", "Wellington", "Waikato", "Southland", "Bay of Plenty", "West Coast") ~ "Y",
+                               council %in% c("Nelson") & date < as.Date("2020-05-17")~ "Y",
+                               council %in% c("Nelson") & date >= as.Date("2020-05-17")~ "N",
+                               council %in% c("Marlborough")~"Raw",
+                               council %in% c("Gisborne") & date < as.Date("2019-10-21")~ "N",
+                               council %in% c("Gisborne") & date >= as.Date("2019-10-21")~ "Y",
+                               council %in% c("Otago") & date < as.Date("2020-01-01")~ "Y",
+                               council %in% c("Otago") & date >= as.Date("2020-01-01")~ "N",
+                               TRUE ~ "Check")) %>%
+  mutate(
+    validated = case_when(
+      quality_code %in% c("10", "210") ~ "Y",
+      quality_code %in% c("140", "254") ~ "N",
+      quality_code %in% c("231", "90") ~ "Y",
+      TRUE ~ validated
+    )
+  ) %>% 
+  mutate(causioned = ifelse(quality_code %in% c("231", "90"), "Y", "N"))
+
+save(ER_air_data_2019, file = "Output/data_extracted/ER_air_data_initial_delivery_1112.RData")  
+s3save(ER_air_data_2019, object = "ER_air_data_2019_1112.rdata", bucket = "data-pipeline-projects/AirQuality/Output")
+
+
+CO_previous_file_mod <- CO_previous_file %>%
+  mutate_if(is.factor, as.character) %>%
+  mutate(date = str_sub(datetime, 1, 10),
+         time = str_sub(datetime, 12, 19)) %>%
+  mutate(aggparameter == "Carbon Monoxide - Hourly average") %>%
+  left_join(ER_air_data_initial_delivery, by = c("aggparameter"))
+
+
+# [[Comparison]]---- 
+
+s3load(object = "ER_air_data_initial_delivery_0912.rdata", bucket = "data-pipeline-projects/AirQuality/Output")
+
+# PM10_ER_previous_file <- read.csv("E:/Air 2018/Measures/PM10 daily concentrations/Data/Tidy csv/pm10-concentrations-1996-2018.csv")
+
+# PM10_ER_site_info <- PM10_ER_previous_file %>%
+#   select(site, latitude, longitude) %>%
+#   distinct(site, latitude, longitude)
+# 
+# PM25_ER_previous_file <- read.csv("E:/Air 2018/Measures/PM25 concentrations/Data/Tidy csv/pm25-concentrations-1996-2017.csv") %>%
+#   mutate_if(is.factor, as.character) %>%
+#   mutate(date = as.Date(date))
+# 
+# PM25_ER_site_info <- PM25_ER_previous_file %>%
+#   select(site, latitude, longitude) %>%
+#   distinct(site, latitude, longitude)
+
+
+CO_previous_file <- s3read_using(read.csv, object = "carbon-monoxide-concentrations-199617.csv", bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-carbon-monoxide-concentrations-199617-CSV")
+# # Not this
+# Ozone_previous_file_13 <- read.csv("ER_old_data/mfe-ozone-concentrations-19962013-CSV/ozone-concentrations-19962013.csv")
+
+Ozone_previous_file_16 <- s3read_using(read.csv, object = "ground-level-ozone-concentrations-auckland-200116.csv", bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-ground-level-ozone-concentrations-auckland-200116-CSV")
+
+NO2_previous_file <- s3read_using(read.csv, object = "nitrogen-dioxide-concentrations-council-and-unitary-authorit.csv", bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-nitrogen-dioxide-concentrations-council-and-unitary-authorit-CSV")
+  
+PM10_previous_file <- s3read_using(read.csv, object = "pm10-concentrations-200617.csv", bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-pm10-concentrations-200617-CSV")
+
+PM25_previous_file <- s3read_using(read.csv, object = "pm25-concentrations-200817.csv", bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-pm25-concentrations-200817-CSV")
+
+SO2_previous_file_17 <- s3read_using(read.csv, object = "sulphur-dioxide-concentrations-200817.csv", bucket = "data-pipeline-projects/AirQuality/RawData/ER_old_data/mfe-sulphur-dioxide-concentrations-200817-CSV")
+# # Not this
+# SO2_previous_file_13 <- read.csv("ER_old_data/mfe-sulphur-dioxide-concentrations-and-exceedances-200513-CSV/sulphur-dioxide-concentrations-and-exceedances-200513.csv")
+
+# library(fuzzyjoin)
+# 
+# previous_site_name <-
+#   c(
+#     as.character(unique(CO_previous_file$site)),
+#     as.character(unique(Ozone_previous_file_16$site)),
+#     as.character(unique(NO2_previous_file$ï..site)),
+#     as.character(unique(PM10_previous_file$ï..site)),
+#     as.character(unique(PM25_previous_file$ï..site)),
+#     as.character(unique(SO2_previous_file_17$site))
+#   )
+# 
+# previous_parameter_name <-
+#   c(
+#     rep("CO", length(unique(
+#       CO_previous_file$site
+#     ))),
+#     rep("Ozone", length(unique(
+#       Ozone_previous_file_16$site
+#     ))),
+#     rep("NO2", length(unique(
+#       NO2_previous_file$ï..site
+#     ))),
+#     rep("PM10", length(unique(
+#       PM10_previous_file$ï..site
+#     ))),
+#     rep("PM2.5", length(unique(
+#       PM25_previous_file$ï..site
+#     ))),
+#     rep("SO2", length(unique(
+#       SO2_previous_file_17$site
+#     )))
+#   )
+# 
+# old_data_site_parameter_list <- data.frame(site_name = previous_site_name,
+#            parameter = previous_parameter_name) %>%
+#   arrange(parameter, site_name) %>%
+#   left_join(PM10_ER_site_info, by = c("site_name" = "site")) %>%
+#   # left_join(PM25_ER_site_info, by = c("site_name" = "site")) %>%
+#   mutate(site_name = str_replace_all(site_name, "_", " ")) %>%
+#   setNames(c("site_name", "parameter", "lat", "long"))
+# 
+# unique(ER_air_data_initial_delivery$aggparameter)
+# 
+# current_data_site_parameter_list <- ER_air_data_initial_delivery %>%
+#   mutate(aggparameter = str_remove_all(aggparameter, c(" - H.+| - D.+"))) %>%
+#   distinct(site, aggparameter, lat, long) %>%
+#   arrange(aggparameter, site) %>%
+#   dplyr::rename(site_name = site,
+#                 parameter = aggparameter) %>%
+#   mutate(site_name = remove_aq_words(wellington_official_station_name(site_name)))
+# 
+#   
+# c(unique(KistersMeasList$station_name), unique(measurementDFfiltered$site), site = c(
+#   "Mount Maunganui at Totara St",
+#   "Mount Maunganui at Whareroa Marae",
+#   "Mount Maunganui at Rail Yard South",
+#   "Mount Maunganui at Tauranga Bridge Marina",
+#   "Mount Maunganui at Rata St",
+#   "Mount Maunganui at De Havilland Way",
+#   "Tauranga at Sulphur Point",
+#   "Tauranga",
+#   "Rotorua",
+#   "Whakatane"
+# )) %>%
+#   data.frame() %>%
+#   setNames("site_name")-> all_data_site_parameter_list
+#   
+# 
+# site_match <- fuzzyjoin::stringdist_join(old_data_site_parameter_list, current_data_site_parameter_list, 
+#                                          by = c("site_name", "parameter", "lat", "long"),
+#                                          mode = "left",
+#                                          ignore_case = TRUE, 
+#                                          method = "jw", 
+#                                          # max_dist = 99, 
+#                                          distance_col = "dist") %>%
+#   filter(parameter.dist == 0) %>%
+#   mutate(geo_dist = (long.dist + lat.dist)/2) %>%
+#   group_by(site_name.x, parameter.x) %>%
+#   arrange(site_name.dist, geo_dist) %>%
+#   slice(1:5)
+# 
+# 
+# top_match <- site_match %>%
+#   group_by(site_name.x, parameter.x) %>%
+#   arrange(site_name.dist, geo_dist) %>%
+#   slice(1) %>%
+#   distinct(site_name.x, site_name.y, .keep_all = TRUE) %>%
+#   group_by(site_name.x) %>%
+#   arrange(site_name.dist) %>%
+#   slice(1)
+# 
+# all_site_match <- fuzzyjoin::stringdist_join(old_data_site_parameter_list, all_data_site_parameter_list, 
+#                                          by = c("site_name"),
+#                                          mode = "left",
+#                                          ignore_case = TRUE, 
+#                                          method = "jw", 
+#                                          # max_dist = 99, 
+#                                          distance_col = "dist") %>%
+#   # rowwise() %>%
+#   group_by(site_name.x) %>%
+#   arrange(dist) %>%
+#   slice(1:5)
+# 
+
+
+###
+
+# PM2.5
+pm25_annual <- PM25_previous_file %>%
+  dplyr::rename(site = 'ï..site') %>%
+  dplyr::mutate(date = as.Date(as.character(date)),
+                year = year(date)) %>%
+  dplyr::group_by(year, council, site) %>%
+  dplyr::summarise(annual_average = mean(pm2_5, na.rm = TRUE),
+                   count = n(),
+                   percentage_complete = percent(count/year),  # Days of a year
+                   .groups = "drop") %>%
+  filter(year >= 2014) %>%
+  mutate(parameter = "pm25")
+
+# PM10
+pm10_annual <- PM10_previous_file %>%
+  dplyr::rename(site = 'ï..site') %>%
+  dplyr::mutate(date = as.Date(as.character(date)),
+                year = year(date)) %>%
+  dplyr::group_by(year, council, site) %>%
+  dplyr::summarise(annual_average = mean(pm10, na.rm = TRUE),
+                   count = n(),
+                   percentage_complete = percent(count/365),
+                   .groups = "drop") %>%
+  filter(year >= 2014) %>%
+  mutate(parameter = "pm10")
+
+no2_annual <- NO2_previous_file %>%
+  dplyr::rename(site = 'ï..site') %>%
+  dplyr::mutate(time = as.POSIXct(as.character(datetime)),
+                date = as.Date(time),
+                year = year(date)) %>%
+  dplyr::group_by(year, council, site, date) %>%
+  dplyr::summarise(daily_average = mean(no2, na.rm = TRUE),
+                   .groups = "drop") %>%
+  dplyr::group_by(year, council, site) %>%  
+  dplyr::summarise(annual_average = mean(daily_average, na.rm = TRUE),
+                   count = n(),
+                   percentage_complete = percent(count/365),
+                   .groups = "drop") %>%
+  filter(year >= 2014) %>%
+  mutate(parameter = "no2")
+
+
+s3load("BoPSiteListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("KistersAllSiteList.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+s3load("HilltopAllSiteListDF.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+BoP_check <- BoPSiteListDF %>%
+  select(council, site, lat, long) %>%
+  distinct()
+
+Kisters_check <- KistersAllSiteList %>%
+  select(council, site, lat, long) %>%
+  distinct()
+
+Hilltop_check <- HilltopAllSiteListDF %>%
+  select(council, site, location) %>%
+  separate(col = location,
+           into = c("lat", "long"),
+           sep = " ") %>%
+  mutate(lat = as.numeric(lat),
+         long = as.numeric(long)) %>%
+  distinct()
+
+# s3load(data_by_airshed_sf, bucket = "data-pipeline-projects/AirQuality/Output/ForShinyApp")
+
+location <- ER_air_data_initial_delivery %>%
+  distinct(council, site, lat, long, sitetype) %>%
+  dplyr::select(-council)
+
+all_sitelist <- bind_rows(BoP_check, Kisters_check, Hilltop_check) %>%
+  filter(!site %in% unique(location$site)) %>%
+  filter(!is.na(lat)) %>%
+  bind_rows(location) %>%
+  distinct(site, .keep_all = TRUE) %>%
+  select(-council)
+
+# Manually match the sites with all_sitelist and with information that Katherine has provided.
+
+pm25site <- pm25_annual %>%
+  distinct(council, site) %>%
+  mutate(site_name = c(NA, "AC Patumahoe", "AC Penrose", "AC Takapuna", "AC Whangaparaoa", "St Albans", "Woolston", "Timaru Anzac Square", "Chanel College AQ", "Wairarapa College AQ", "Wainuiomata Bowling Club AQ", "AQ Nelson at St Vincent St", "Claudelands", "Ashburton", "Rangiora", "Waimate Kennedy", "Washdyke Flat Road", "AQ Richmond Central at Plunket", "SWDC Billah St Water Reservoir", "Geraldine", "Kaiapoi", "Awatoto AQ", "St Johns", "Blenheim Bowling Club", "Air Quality Whangarei, Robert Street", "Riccarton Road")) %>%
+  left_join(all_sitelist, by = c("site_name" = "site"))
+
+no2site <- no2_annual %>%
+  distinct(council, site) %>%
+  mutate(site_name = c("AC Glen Eden", "AC Henderson", "AC Musick Point", "AC Patumahoe", "AC Penrose", "AC POAL", "AC Queen Street", "AC Takapuna", "AC Whangaparaoa", "Riccarton Road", "St Albans", "Wairarapa College AQ", "Upper Hutt at Savage Park AQ", "Bloodbank")) %>%
+  left_join(all_sitelist, by = c("site_name" = "site"))
+
+pm10site <- pm10_annual %>%
+  distinct(council, site) %>%
+  mutate(site_name = c("AC Botany Downs", "AC Glen Eden", "AC Henderson", "AC Khyber Pass (NIWA Data)", "AC POAL", "AC Orewa", "AC Pakuranga", "AC Penrose", "AC Patumahoe", "AC Takapuna", "AC Whangaparaoa", "Rotorua", NA, NA, "Tauranga", "Whakatane", "Ashburton", "St Albans", "Woolston", "Geraldine", "Kaiapoi", "Rangiora", "Timaru Anzac Square", "Waimate Kennedy", "Washdyke Flat Road", "Gisborne Boys High Air Quality", "Birch Lane AQ", "Chanel College AQ", "Wairarapa College AQ", "Upper Hutt at Savage Park AQ", "Wainuiomata Bowling Club AQ", "Awatoto AQ", "Marewa Park", "Air Quality at Taihape", "Air Quality at Taumarunui", "Blenheim Bowling Club", "AQ Nelson at St Vincent St", "AQ Nelson at Blackwood St", "AQ Nelson at Brook St Reserve", "Air Quality Whangarei, Robert Street", "Air Quality Marsden Point, Peter Snell Road", "Alexandra at 5 Ventry Street Air Quality", "Arrowtown Air Quality", "Balclutha North Air Quality", "Clyde Air Quality", "Cromwell Air Quality", "Dunedin Air Quality", "Milton Air Quality", "Mosgiel Air Quality", "Palmerston Air Quality", "Gore at Main Street", "Invercargill at Pomona Street", "Winton at Essex Street", "AQ Richmond Central at Plunket", "Reefton Air Quality @ School", "Leamington Domain", "Claudelands", "Bloodbank", "Bowling Club", "Gilles Avenue", "Te Awamutu Borough W/S Intake", "Waitomo District Council Yard - Queen St", "SWDC Billah St Water Reservoir", "Turangi Fire Station", "AQ Nelson at Greenmeadows", NA, "Morrinsville College", "Kerikeri GW at 10 Pungaere Rd", "Thames High School", "Riccarton Road", "Brook St AQ")) %>%
+  left_join(all_sitelist, by = c("site_name" = "site"))
+
+so2site <- SO2_previous_file_17 %>%
+  distinct(`ï..council`, site) %>%
+  dplyr::rename(council = `ï..council`) %>%
+  mutate(site_name = c("Ashburton", "Riccarton Road", "St Albans", "Woolston", "Geraldine", "Kaiapoi", "Mount Maunganui at Totara St", "AC POAL", "Mount Maunganui at Whareroa Marae", "AC Penrose", "Air Quality Whangarei, Robert Street", "Timaru Anzac Square", "Washdyke Flat Road")) %>%
+  left_join(all_sitelist, by = c("site_name" = "site"))
+
+cosite <- CO_previous_file %>%
+  distinct(`ï..council`, site) %>%
+  dplyr::rename(council = `ï..council`) %>%
+  mutate(site_name = c("Ashburton", "AC Botany Downs", NA, "Riccarton Road", "St Albans", "Woolston", NA, NA, "Geraldine", "AC Glen Eden", "AC Glen Eden", "AC Henderson", "AC Henderson", NA, "Kaiapoi", "AC Khyber Pass (NIWA Data)", "AC Khyber Pass (NIWA Data)", NA, "Wairarapa College AQ", NA, NA, NA, NA, NA, NA, NA, "Bloodbank", NA, "AC POAL", "AC Pakuranga", "AC Pakuranga", "ECNZ Peachgrove Rd", NA, NA, NA, NA, "ARC Mobile - Pukekohe",  "AC Queen Street", "AC Queen Street", "AC Queen Street", "Rangiora", "Air Quality Whangarei, Robert Street", NA, NA, NA, "AC Takapuna", "AC Takapuna", "Tauranga at Otumoetai", "Timaru Anzac Square", "Upper Hutt at Savage Park AQ", "Waimate Kennedy", "Washdyke Flat Road")) %>%
+  left_join(all_sitelist, by = c("site_name" = "site"))
+
+ozonesite <- Ozone_previous_file_16 %>%
+  distinct(`ï..council`, site) %>%
+  dplyr::rename(council = `ï..council`) %>%
+  mutate(site_name = c(NA, NA, NA, NA, "AC Musick Point", "AC Patumahoe", NA, "AC Waiheke", "AC Whangaparaoa")) %>%
+  left_join(all_sitelist, by = c("site_name" = "site"))
+
+# Checklist of all 'unique' site names across three datasets
+site_name_match_df <- bind_rows(pm25site, no2site, pm10site, so2site, cosite, ozonesite) %>%
+  distinct(site, .keep_all = TRUE) %>%
+  dplyr::rename(site_old = site) %>%
+  dplyr::select(site_old, site_name)
+
+s3save(site_name_match_df, object = "site_name_match_df.rdata", bucket = "data-pipeline-projects/AirQuality/ProcessedData")
+
+PM25_ER_previous_file %>% head()
+
+PM25_comparison <- ER_air_data_initial_delivery %>%
+  filter(aggparameter == "PM2.5 - Daily average") %>%
+  dplyr::select(-lat, -long, -council) %>%
+  left_join(unique_site, by = c("site" = "site_name")) %>%
+  left_join(PM25_ER_previous_file, by = c("site_old" = "site", "date"))
+
+
+
+
+
+

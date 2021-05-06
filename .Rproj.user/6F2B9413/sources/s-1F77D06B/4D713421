@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1610337114806.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "4D713421",
+    "lastKnownWriteTime" : 7517480181882167328,
+    "last_content_update" : 1610337114806,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "6838D3FE",
+        "caption" : "emissions_test",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=emissions_test&cache_key=6838D3FE",
+        "displayedObservations" : 14421,
+        "environment" : "",
+        "expression" : "emissions_test",
+        "object" : "emissions_test",
+        "preview" : 0,
+        "totalObservations" : 14421,
+        "variables" : 12
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 5,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}
